@@ -83,7 +83,8 @@ void PointerDataPacketConverter::ConvertPointerData(
       case PointerData::Change::kRemove: {
         // Makes sure we have an existing pointer
         auto iter = states_.find(pointer_data.device);
-        if (iter == states_.end()) break;
+        if (iter == states_.end())
+          break;
         FML_DCHECK(iter != states_.end());
         PointerState state = iter->second;
 
