@@ -237,3 +237,17 @@ void FlutterDesktopPluginRegistrarUnregisterTopLevelWindowProcDelegate(
         ->PluginRegistrarUnregisterTopLevelWindowProcDelegate(delegate);
   }
 }
+
+UINT FlutterDesktopGetDpiForMonitor(HMONITOR monitor) {
+  if (s_stub_implementation) {
+    return s_stub_implementation->GetDpiForMonitor(monitor);
+  }
+  return 96;
+}
+
+UINT FlutterDesktopGetDpiForHWND(HWND hwnd) {
+  if (s_stub_implementation) {
+    return s_stub_implementation->GetDpiForHWND(hwnd);
+  }
+  return 96;
+}

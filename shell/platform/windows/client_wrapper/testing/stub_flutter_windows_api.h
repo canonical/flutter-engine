@@ -121,6 +121,12 @@ class StubFlutterWindowsApi {
       LRESULT* result) {
     return false;
   }
+
+  // Called for FlutterDesktopGetDpiForMonitor.
+  virtual UINT GetDpiForMonitor(HMONITOR monitor) { return 96; }
+
+  // Called for FlutterDesktopGetDpiForHWND.
+  virtual UINT GetDpiForHWND(HWND hwnd) { return 96; }
 };
 
 // A test helper that owns a stub implementation, making it the test stub for
