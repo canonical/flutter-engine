@@ -12,6 +12,18 @@
 
 namespace flutter {
 
+struct FlutterWindowSize {
+  int width = 0;
+  int height = 0;
+};
+
+struct FlutterWindowCreationResult {
+  FlutterViewId view_id;
+  std::optional<FlutterViewId> parent_id = std::nullopt;
+  FlutterWindowArchetype archetype;
+  FlutterWindowSize size;
+};
+
 // A singleton controller for Flutter windows.
 class FlutterWindowController {
  public:
@@ -35,12 +47,13 @@ class FlutterWindowController {
   auto createRegularWindow(std::wstring const& title,
                            Win32Window::Point const& origin,
                            Win32Window::Size const& size)
-      -> std::optional<FlutterViewId>;
-  auto createPopupWindow(std::wstring const& title,
-                         Win32Window::Point const& origin,
-                         Win32Window::Size const& size,
-                         std::optional<FlutterViewId> parent_view_id =
-                             std::nullopt) -> std::optional<FlutterViewId>;
+      -> std::optional<FlutterWindowCreationResult>;
+  auto createPopupWindow(
+      std::wstring const& title,
+      Win32Window::Point const& origin,
+      Win32Window::Size const& size,
+      std::optional<FlutterViewId> parent_view_id = std::nullopt)
+      -> std::optional<FlutterWindowCreationResult>;
   auto destroyWindow(FlutterViewId view_id, bool destroy_native_window) -> bool;
   auto windows() const -> ViewWindowMap const&;
   auto channel() const -> std::unique_ptr<MethodChannel<>> const&;
@@ -57,6 +70,7 @@ class FlutterWindowController {
   void sendOnWindowDestroyed(FlutterViewId view_id) const;
   void sendOnWindowResized(FlutterViewId view_id) const;
   void cleanupClosedWindows();
+  FlutterWindowSize getWindowSize(flutter::FlutterViewId view_id) const;
 
   mutable std::mutex mutex_;
   std::unique_ptr<MethodChannel<>> channel_;
