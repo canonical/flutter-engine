@@ -605,14 +605,6 @@ void FlutterWindowController::initializeChannel() {
             result->NotImplemented();
           }
         });
-
-    // To avoid an overflow of onWindowCreated messages, the number of messages
-    // that get buffered must be at least equal to the number of FlutterWindows
-    // created in the entrypoint of the runner code. This is required because
-    // the channel's message handler is set up on the Dart side only after the
-    // first call to State::didUpdateWidget.
-    auto const max_windows_on_startup{16};
-    channel_->Resize(max_windows_on_startup);
   }
 }
 
@@ -650,16 +642,16 @@ auto FlutterWindowController::createRegularWindow(
   auto const view_id{window->flutter_controller()->view_id()};
   windows_[view_id] = std::move(window);
 
-  initializeChannel();
   cleanupClosedWindows();
   sendOnWindowCreated(FlutterWindowArchetype::regular, view_id, std::nullopt);
 
+  FlutterWindowCreationResult result{
+      .view_id = view_id,
+      .archetype = FlutterWindowArchetype::regular,
+      .size = getWindowSize(view_id)};
+
   lock.unlock();
 
-  FlutterWindowCreationResult result;
-  result.view_id = view_id;
-  result.archetype = FlutterWindowArchetype::regular;
-  result.size = getWindowSize(view_id);
   sendOnWindowResized(view_id);
 
   return result;
@@ -698,18 +690,16 @@ auto FlutterWindowController::createPopupWindow(
   auto const view_id{window->flutter_controller()->view_id()};
   windows_[view_id] = std::move(window);
 
-  initializeChannel();
   cleanupClosedWindows();
-  sendOnWindowCreated(FlutterWindowArchetype::popup, view_id,
-                      parent_view_id ? *parent_view_id : -1);
+  sendOnWindowCreated(FlutterWindowArchetype::popup, view_id, parent_view_id);
+
+  FlutterWindowCreationResult result{.view_id = view_id,
+                                     .parent_id = parent_view_id,
+                                     .archetype = FlutterWindowArchetype::popup,
+                                     .size = getWindowSize(view_id)};
 
   lock.unlock();
 
-  FlutterWindowCreationResult result;
-  result.view_id = view_id;
-  result.archetype = FlutterWindowArchetype::popup;
-  result.parent_id = parent_view_id;
-  result.size = getWindowSize(view_id);
   sendOnWindowResized(view_id);
 
   return result;
