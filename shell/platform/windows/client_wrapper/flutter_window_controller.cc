@@ -356,10 +356,21 @@ void handleCreateRegularWindow(
                      : flutter::Win32Window::Point{0, 0};
         }()};
 
-        if (auto const view_id{
+        if (auto const data{
                 flutter::FlutterWindowController::instance()
                     .createRegularWindow(L"regular", origin, size)}) {
-          result->Success(flutter::EncodableValue(*view_id));
+          result->Success(flutter::EncodableValue(flutter::EncodableMap{
+              {flutter::EncodableValue("viewId"),
+               flutter::EncodableValue(data->view_id)},
+              {flutter::EncodableValue("parentViewId"),
+               data->parent_id ? flutter::EncodableValue(*data->parent_id)
+                               : flutter::EncodableValue()},
+              {flutter::EncodableValue("archetype"),
+               flutter::EncodableValue(static_cast<int>(data->archetype))},
+              {flutter::EncodableValue("width"),
+               flutter::EncodableValue(data->size.width)},
+              {flutter::EncodableValue("height"),
+               flutter::EncodableValue((data->size.height))}}));
         } else {
           result->Error("UNAVAILABLE", "Can't create window.");
         }
@@ -526,10 +537,21 @@ void handleCreatePopupWindow(flutter::MethodCall<> const& call,
       auto const& [origin,
                    new_size]{applyPositioner(positioner, size, *parent)};
 
-      if (auto const view_id{
+      if (auto const data{
               flutter::FlutterWindowController::instance().createPopupWindow(
                   L"popup", origin, new_size, *parent)}) {
-        result->Success(flutter::EncodableValue(*view_id));
+        result->Success(flutter::EncodableValue(flutter::EncodableMap{
+            {flutter::EncodableValue("viewId"),
+             flutter::EncodableValue(data->view_id)},
+            {flutter::EncodableValue("parentViewId"),
+             data->parent_id ? flutter::EncodableValue(*data->parent_id)
+                             : flutter::EncodableValue()},
+            {flutter::EncodableValue("archetype"),
+             flutter::EncodableValue(static_cast<int>(data->archetype))},
+            {flutter::EncodableValue("width"),
+             flutter::EncodableValue(data->size.width)},
+            {flutter::EncodableValue("height"),
+             flutter::EncodableValue((data->size.height))}}));
       } else {
         result->Error("UNAVAILABLE", "Can't create window.");
       }
@@ -597,12 +619,14 @@ void FlutterWindowController::initializeChannel() {
 void FlutterWindowController::setEngine(std::shared_ptr<FlutterEngine> engine) {
   std::lock_guard<std::mutex> const lock(mutex_);
   engine_ = std::move(engine);
+  initializeChannel();
 }
 
 auto FlutterWindowController::createRegularWindow(
     std::wstring const& title,
     Win32Window::Point const& origin,
-    Win32Window::Size const& size) -> std::optional<FlutterViewId> {
+    Win32Window::Size const& size)
+    -> std::optional<FlutterWindowCreationResult> {
   std::unique_lock lock(mutex_);
   if (!engine_) {
     std::cerr << "Cannot create window without an engine.\n";
@@ -631,9 +655,14 @@ auto FlutterWindowController::createRegularWindow(
   sendOnWindowCreated(FlutterWindowArchetype::regular, view_id, std::nullopt);
 
   lock.unlock();
+
+  FlutterWindowCreationResult result;
+  result.view_id = view_id;
+  result.archetype = FlutterWindowArchetype::regular;
+  result.size = getWindowSize(view_id);
   sendOnWindowResized(view_id);
 
-  return view_id;
+  return result;
 }
 
 auto FlutterWindowController::createPopupWindow(
@@ -641,7 +670,7 @@ auto FlutterWindowController::createPopupWindow(
     Win32Window::Point const& origin,
     Win32Window::Size const& size,
     std::optional<FlutterViewId> parent_view_id)
-    -> std::optional<FlutterViewId> {
+    -> std::optional<FlutterWindowCreationResult> {
   std::unique_lock lock(mutex_);
   if (!engine_) {
     std::cerr << "Cannot create window without an engine.\n";
@@ -675,9 +704,15 @@ auto FlutterWindowController::createPopupWindow(
                       parent_view_id ? *parent_view_id : -1);
 
   lock.unlock();
+
+  FlutterWindowCreationResult result;
+  result.view_id = view_id;
+  result.archetype = FlutterWindowArchetype::popup;
+  result.parent_id = parent_view_id;
+  result.size = getWindowSize(view_id);
   sendOnWindowResized(view_id);
 
-  return view_id;
+  return result;
 }
 
 auto FlutterWindowController::destroyWindow(FlutterViewId view_id,
@@ -763,30 +798,35 @@ void FlutterWindowController::sendOnWindowDestroyed(
 void FlutterWindowController::sendOnWindowResized(FlutterViewId view_id) const {
   std::lock_guard const lock(mutex_);
   if (channel_) {
-    auto* const hwnd{windows_.at(view_id)->GetHandle()};
-    RECT frame;
-    if (FAILED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &frame,
-                                     sizeof(frame)))) {
-      GetWindowRect(hwnd, &frame);
-    }
-
-    // Convert to logical coordinates
-    auto const dpr{FlutterDesktopGetDpiForHWND(hwnd) / base_dpi};
-    frame.left = static_cast<LONG>(frame.left / dpr);
-    frame.top = static_cast<LONG>(frame.top / dpr);
-    frame.right = static_cast<LONG>(frame.right / dpr);
-    frame.bottom = static_cast<LONG>(frame.bottom / dpr);
-
-    auto const width{frame.right - frame.left};
-    auto const height{frame.bottom - frame.top};
+    auto size = getWindowSize(view_id);
     channel_->InvokeMethod(
         "onWindowResized",
         std::make_unique<EncodableValue>(EncodableMap{
             {EncodableValue("viewId"), EncodableValue(view_id)},
-            {EncodableValue("width"), EncodableValue(static_cast<int>(width))},
-            {EncodableValue("height"),
-             EncodableValue(static_cast<int>(height))}}));
+            {EncodableValue("width"), EncodableValue(size.width)},
+            {EncodableValue("height"), EncodableValue(size.height)}}));
   }
+}
+
+FlutterWindowSize FlutterWindowController::getWindowSize(
+    flutter::FlutterViewId view_id) const {
+  auto* const hwnd{windows_.at(view_id)->GetHandle()};
+  RECT frame;
+  if (FAILED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &frame,
+                                   sizeof(frame)))) {
+    GetWindowRect(hwnd, &frame);
+  }
+
+  // Convert to logical coordinates
+  auto const dpr{FlutterDesktopGetDpiForHWND(hwnd) / base_dpi};
+  frame.left = static_cast<LONG>(frame.left / dpr);
+  frame.top = static_cast<LONG>(frame.top / dpr);
+  frame.right = static_cast<LONG>(frame.right / dpr);
+  frame.bottom = static_cast<LONG>(frame.bottom / dpr);
+
+  auto const width{frame.right - frame.left};
+  auto const height{frame.bottom - frame.top};
+  return {static_cast<int>(width), static_cast<int>(height)};
 }
 
 }  // namespace flutter
