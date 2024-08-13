@@ -387,7 +387,6 @@ void handleCreateDialogWindow(
     auto const size_it{map->find(flutter::EncodableValue("size"))};
 
     if (parent_it != map->end() && size_it != map->end()) {
-      // parent
       auto const* const parent{std::get_if<int>(&parent_it->second)};
       if (!parent) {
         result->Error("INVALID_VALUE",
