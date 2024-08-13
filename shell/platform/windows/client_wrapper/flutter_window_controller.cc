@@ -347,18 +347,8 @@ void handleCreateRegularWindow(
             static_cast<unsigned int>(*width),
             static_cast<unsigned int>(*height)};
 
-        // Window will be centered within the 'main window'
-        auto const origin{[size]() -> flutter::Win32Window::Point {
-          auto const& windows{
-              flutter::FlutterWindowController::instance().windows()};
-          return windows.find(0) != windows.end()
-                     ? calculateCenteredOrigin(size, windows.at(0)->GetHandle())
-                     : flutter::Win32Window::Point{0, 0};
-        }()};
-
-        if (auto const data{
-                flutter::FlutterWindowController::instance()
-                    .createRegularWindow(L"regular", origin, size)}) {
+        if (auto const data{flutter::FlutterWindowController::instance()
+                                .createRegularWindow(L"regular", size)}) {
           result->Success(flutter::EncodableValue(flutter::EncodableMap{
               {flutter::EncodableValue("viewId"),
                flutter::EncodableValue(data->view_id)},
@@ -382,6 +372,79 @@ void handleCreateRegularWindow(
       result->Error(
           "INVALID_VALUE",
           "Map does not contain all required keys: {'width', 'height'}.");
+    }
+  } else {
+    result->Error("INVALID_VALUE", "Value argument is not a map.");
+  }
+}
+
+void handleCreateDialogWindow(
+    flutter::MethodCall<> const& call,
+    std::unique_ptr<flutter::MethodResult<>>& result) {
+  auto const* const arguments{call.arguments()};
+  if (auto const* const map{std::get_if<flutter::EncodableMap>(arguments)}) {
+    auto const parent_it{map->find(flutter::EncodableValue("parent"))};
+    auto const size_it{map->find(flutter::EncodableValue("size"))};
+
+    if (parent_it != map->end() && size_it != map->end()) {
+      // parent
+      auto const* const parent{std::get_if<int>(&parent_it->second)};
+      if (!parent) {
+        result->Error("INVALID_VALUE",
+                      "Value for 'parent' must be of type int.");
+        return;
+      }
+
+      // size
+      auto const* const size_list{
+          std::get_if<std::vector<flutter::EncodableValue>>(&size_it->second)};
+      if (size_list->size() != 2 ||
+          !std::holds_alternative<int>(size_list->at(0)) ||
+          !std::holds_alternative<int>(size_list->at(1))) {
+        result->Error("INVALID_VALUE",
+                      "Values for 'size' must be of type int.");
+        return;
+      }
+      auto const width{std::get<int>(size_list->at(0))};
+      auto const height{std::get<int>(size_list->at(1))};
+      flutter::Win32Window::Size const size{static_cast<unsigned int>(width),
+                                            static_cast<unsigned int>(height)};
+
+      auto const origin{
+          [&size, &parent]() -> std::optional<flutter::Win32Window::Point> {
+            if (parent) {
+              auto const& windows{
+                  flutter::FlutterWindowController::instance().windows()};
+              if (windows.find(*parent) != windows.end()) {
+                return calculateCenteredOrigin(
+                    size, windows.at(*parent)->GetHandle());
+              }
+            }
+            return std::nullopt;
+          }()};
+
+      if (auto const data{
+              flutter::FlutterWindowController::instance().createDialogWindow(
+                  L"dialog", size, origin, *parent)}) {
+        result->Success(flutter::EncodableValue(flutter::EncodableMap{
+            {flutter::EncodableValue("viewId"),
+             flutter::EncodableValue(data->view_id)},
+            {flutter::EncodableValue("parentViewId"),
+             data->parent_id ? flutter::EncodableValue(*data->parent_id)
+                             : flutter::EncodableValue()},
+            {flutter::EncodableValue("archetype"),
+             flutter::EncodableValue(static_cast<int>(data->archetype))},
+            {flutter::EncodableValue("width"),
+             flutter::EncodableValue(data->size.width)},
+            {flutter::EncodableValue("height"),
+             flutter::EncodableValue((data->size.height))}}));
+      } else {
+        result->Error("UNAVAILABLE", "Can't create window.");
+      }
+    } else {
+      result->Error(
+          "INVALID_VALUE",
+          "Map does not contain all required keys: {'parent', 'size'}.");
     }
   } else {
     result->Error("INVALID_VALUE", "Value argument is not a map.");
@@ -597,6 +660,8 @@ void FlutterWindowController::initializeChannel() {
                std::unique_ptr<MethodResult<>> result) {
           if (call.method_name() == "createRegularWindow") {
             handleCreateRegularWindow(call, result);
+          } else if (call.method_name() == "createDialogWindow") {
+            handleCreateDialogWindow(call, result);
           } else if (call.method_name() == "createPopupWindow") {
             handleCreatePopupWindow(call, result);
           } else if (call.method_name() == "destroyWindow") {
@@ -614,22 +679,20 @@ void FlutterWindowController::setEngine(std::shared_ptr<FlutterEngine> engine) {
   initializeChannel();
 }
 
-auto FlutterWindowController::createRegularWindow(
-    std::wstring const& title,
-    Win32Window::Point const& origin,
-    Win32Window::Size const& size)
+auto FlutterWindowController::createRegularWindow(std::wstring const& title,
+                                                  Win32Window::Size const& size)
     -> std::optional<FlutterWindowCreationResult> {
   std::unique_lock lock(mutex_);
   if (!engine_) {
-    std::cerr << "Cannot create window without an engine.\n";
+    std::cerr << "Cannot create regular window without an engine.\n";
     return std::nullopt;
   }
   auto window{std::make_unique<FlutterWin32Window>(engine_)};
 
   lock.unlock();
-  if (!window->Create(title, origin, size, FlutterWindowArchetype::regular,
-                      nullptr)) {
-    std::cerr << "Cannot create window due to a Win32 error.\n";
+  if (!window->Create(title, size, FlutterWindowArchetype::regular,
+                      std::nullopt, std::nullopt)) {
+    std::cerr << "Cannot create regular window due to a Win32 error.\n";
     return std::nullopt;
   }
   lock.lock();
@@ -657,6 +720,51 @@ auto FlutterWindowController::createRegularWindow(
   return result;
 }
 
+auto FlutterWindowController::createDialogWindow(
+    std::wstring const& title,
+    Win32Window::Size const& size,
+    std::optional<Win32Window::Point> origin,
+    std::optional<FlutterViewId> parent_view_id)
+    -> std::optional<FlutterWindowCreationResult> {
+  std::unique_lock lock(mutex_);
+  if (!engine_) {
+    std::cerr << "Cannot create dialog without an engine.\n";
+    return std::nullopt;
+  }
+
+  std::optional<HWND> const parent_hwnd{
+      parent_view_id && windows_.find(*parent_view_id) != windows_.end()
+          ? std::optional<HWND>{windows_[*parent_view_id].get()->GetHandle()}
+          : std::nullopt};
+  auto window{std::make_unique<FlutterWin32Window>(engine_)};
+
+  lock.unlock();
+  if (!window->Create(title, size, FlutterWindowArchetype::dialog, origin,
+                      parent_hwnd)) {
+    std::cerr << "Cannot create dialog due to a Win32 error.\n";
+    return std::nullopt;
+  }
+  lock.lock();
+
+  auto const view_id{window->flutter_controller()->view_id()};
+  windows_[view_id] = std::move(window);
+
+  cleanupClosedWindows();
+  sendOnWindowCreated(FlutterWindowArchetype::dialog, view_id, parent_view_id);
+
+  FlutterWindowCreationResult result{
+      .view_id = view_id,
+      .parent_id = parent_view_id,
+      .archetype = FlutterWindowArchetype::dialog,
+      .size = getWindowSize(view_id)};
+
+  lock.unlock();
+
+  sendOnWindowResized(view_id);
+
+  return result;
+}
+
 auto FlutterWindowController::createPopupWindow(
     std::wstring const& title,
     Win32Window::Point const& origin,
@@ -665,11 +773,7 @@ auto FlutterWindowController::createPopupWindow(
     -> std::optional<FlutterWindowCreationResult> {
   std::unique_lock lock(mutex_);
   if (!engine_) {
-    std::cerr << "Cannot create window without an engine.\n";
-    return std::nullopt;
-  }
-  if (windows_.empty()) {
-    std::cerr << "Cannot create this window as the first window.\n";
+    std::cerr << "Cannot create popup without an engine.\n";
     return std::nullopt;
   }
 
@@ -677,12 +781,16 @@ auto FlutterWindowController::createPopupWindow(
                                                 windows_.end()
                               ? windows_[*parent_view_id].get()->GetHandle()
                               : nullptr};
+  if (!parent_hwnd) {
+    std::cerr << "Cannot create popup without a parent window.\n";
+    return std::nullopt;
+  }
   auto window{std::make_unique<FlutterWin32Window>(engine_)};
 
   lock.unlock();
-  if (!window->Create(title, origin, size, FlutterWindowArchetype::popup,
+  if (!window->Create(title, size, FlutterWindowArchetype::popup, origin,
                       parent_hwnd)) {
-    std::cerr << "Cannot create window due to a Win32 error.\n";
+    std::cerr << "Cannot create popup due to a Win32 error.\n";
     return std::nullopt;
   }
   lock.lock();
