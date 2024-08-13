@@ -394,7 +394,6 @@ void handleCreateDialogWindow(
         return;
       }
 
-      // size
       auto const* const size_list{
           std::get_if<std::vector<flutter::EncodableValue>>(&size_it->second)};
       if (size_list->size() != 2 ||
