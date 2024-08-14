@@ -53,11 +53,15 @@ class FlutterWindowController {
       std::optional<Win32Window::Point> origin,
       std::optional<FlutterViewId> parent_view_id = std::nullopt)
       -> std::optional<FlutterWindowCreationResult>;
-  auto createPopupWindow(
-      std::wstring const& title,
-      Win32Window::Point const& origin,
-      Win32Window::Size const& size,
-      std::optional<FlutterViewId> parent_view_id = std::nullopt)
+  auto createSatelliteWindow(std::wstring const& title,
+                             Win32Window::Point const& origin,
+                             Win32Window::Size const& size,
+                             FlutterViewId parent_view_id)
+      -> std::optional<FlutterWindowCreationResult>;
+  auto createPopupWindow(std::wstring const& title,
+                         Win32Window::Point const& origin,
+                         Win32Window::Size const& size,
+                         FlutterViewId parent_view_id)
       -> std::optional<FlutterWindowCreationResult>;
   auto destroyWindow(FlutterViewId view_id, bool destroy_native_window) -> bool;
   auto windows() const -> ViewWindowMap const&;

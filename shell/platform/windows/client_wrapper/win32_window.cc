@@ -45,6 +45,22 @@ auto getLastErrorAsString() -> std::string {
   return oss.str();
 }
 
+// Calculate the offset between the position of a window and the position of its
+// parent.
+POINT CalculateWindowOffset(HWND window, HWND parent) {
+  POINT offset = {0, 0};
+  if (window && parent) {
+    RECT window_rect;
+    RECT parent_rect;
+    if (GetWindowRect(window, &window_rect) &&
+        GetWindowRect(parent, &parent_rect)) {
+      offset.x = window_rect.left - parent_rect.left;
+      offset.y = window_rect.top - parent_rect.top;
+    }
+  }
+  return offset;
+}
+
 // Dynamically loads the |EnableNonClientDpiScaling| from the User32 module.
 // This API is only needed for PerMonitor V1 awareness mode.
 void EnableFullDpiSupportIfAvailable(HWND hwnd) {
@@ -243,6 +259,7 @@ bool Win32Window::Create(std::wstring const& title,
       } else {
         // If the dialog has a parent, make it modal by disabling the parent
         // window
+        // TODO: also disable the satellites
         EnableWindow(*parent, FALSE);
         // If the parent window has the WS_EX_TOOLWINDOW style, apply the same
         // style to the dialog
@@ -252,7 +269,15 @@ bool Win32Window::Create(std::wstring const& title,
       }
       break;
     case FlutterWindowArchetype::satellite:
-      // TODO
+      window_style |= WS_OVERLAPPEDWINDOW;
+      extended_window_style |= WS_EX_TOOLWINDOW;
+      if (auto* const parent_window{
+              GetThisFromHandle(parent.value_or(nullptr))}) {
+        if (parent_window->child_content_ != nullptr) {
+          SetFocus(parent_window->child_content_);
+        }
+        parent_window->child_satellites_.insert(this);
+      }
       break;
     case FlutterWindowArchetype::popup:
       window_style |= WS_POPUP;
@@ -311,6 +336,10 @@ bool Win32Window::Create(std::wstring const& title,
       extended_window_style, window_class, title.c_str(), window_style, x, y,
       scale(size.width, scale_factor), scale(size.height, scale_factor),
       parent.value_or(nullptr), nullptr, GetModuleHandle(nullptr), this)};
+
+  if (parent) {
+    offset_from_parent_ = CalculateWindowOffset(window, *parent);
+  }
 
   if (!window) {
     auto const error_message{getLastErrorAsString()};
@@ -416,6 +445,26 @@ Win32Window::MessageHandler(HWND hwnd,
       }
       return 0;
 
+    case WM_MOVE: {
+      if (auto* const owner_window{GetWindow(window_handle_, GW_OWNER)}) {
+        offset_from_parent_ =
+            CalculateWindowOffset(window_handle_, owner_window);
+      }
+
+      // Move satellites attached to this window
+      RECT rect;
+      GetWindowRect(hwnd, &rect);
+      for (auto* satellite : child_satellites_) {
+        RECT rect_satellite;
+        GetWindowRect(satellite->GetHandle(), &rect_satellite);
+        MoveWindow(satellite->GetHandle(),
+                   rect.left + satellite->offset_from_parent_.x,
+                   rect.top + satellite->offset_from_parent_.y,
+                   rect_satellite.right - rect_satellite.left,
+                   rect_satellite.bottom - rect_satellite.top, FALSE);
+      }
+    } break;
+
     case WM_MOUSEACTIVATE:
       if (child_content_ != nullptr) {
         SetFocus(child_content_);
@@ -503,10 +552,14 @@ void Win32Window::OnDestroy() {
     case FlutterWindowArchetype::dialog:
       if (auto* const owner_window{GetWindow(window_handle_, GW_OWNER)}) {
         EnableWindow(owner_window, TRUE);
+        // TODO: Also enable the satellites of the owner_window
         SetForegroundWindow(owner_window);
       }
       break;
     case FlutterWindowArchetype::satellite:
+      if (auto* const parent_window{GetParent(window_handle_)}) {
+        GetThisFromHandle(parent_window)->child_satellites_.erase(this);
+      }
       break;
     case FlutterWindowArchetype::popup:
       if (auto* const parent_window{GetParent(window_handle_)}) {

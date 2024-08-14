@@ -447,6 +447,175 @@ void handleCreateDialogWindow(
   }
 }
 
+void handleCreateSatelliteWindow(
+    flutter::MethodCall<> const& call,
+    std::unique_ptr<flutter::MethodResult<>>& result) {
+  auto const* const arguments{call.arguments()};
+  if (auto const* const map{std::get_if<flutter::EncodableMap>(arguments)}) {
+    auto const parent_it{map->find(flutter::EncodableValue("parent"))};
+    auto const size_it{map->find(flutter::EncodableValue("size"))};
+    auto const anchor_rect_it{map->find(flutter::EncodableValue("anchorRect"))};
+    auto const positioner_parent_anchor_it{
+        map->find(flutter::EncodableValue("positionerParentAnchor"))};
+    auto const positioner_child_anchor_it{
+        map->find(flutter::EncodableValue("positionerChildAnchor"))};
+    auto const positioner_offset_it{
+        map->find(flutter::EncodableValue("positionerOffset"))};
+    auto const positioner_constraint_adjustment_it{
+        map->find(flutter::EncodableValue("positionerConstraintAdjustment"))};
+
+    if (parent_it != map->end() && size_it != map->end() &&
+        anchor_rect_it != map->end() &&
+        positioner_parent_anchor_it != map->end() &&
+        positioner_child_anchor_it != map->end() &&
+        positioner_offset_it != map->end() &&
+        positioner_constraint_adjustment_it != map->end()) {
+      // parent
+      auto const* const parent{std::get_if<int>(&parent_it->second)};
+      if (!parent) {
+        result->Error("INVALID_VALUE",
+                      "Value for 'parent' must be of type int.");
+        return;
+      }
+
+      // size
+      auto const* const size_list{
+          std::get_if<std::vector<flutter::EncodableValue>>(&size_it->second)};
+      if (size_list->size() != 2 ||
+          !std::holds_alternative<int>(size_list->at(0)) ||
+          !std::holds_alternative<int>(size_list->at(1))) {
+        result->Error("INVALID_VALUE",
+                      "Values for 'size' must be of type int.");
+        return;
+      }
+      auto const width{std::get<int>(size_list->at(0))};
+      auto const height{std::get<int>(size_list->at(1))};
+      flutter::Win32Window::Size const size{static_cast<unsigned int>(width),
+                                            static_cast<unsigned int>(height)};
+
+      // anchorRect
+      auto const* const anchor_rect_list{
+          std::get_if<std::vector<flutter::EncodableValue>>(
+              &anchor_rect_it->second)};
+      if (anchor_rect_list->size() != 4 ||
+          !std::holds_alternative<int>(anchor_rect_list->at(0)) ||
+          !std::holds_alternative<int>(anchor_rect_list->at(1)) ||
+          !std::holds_alternative<int>(anchor_rect_list->at(2)) ||
+          !std::holds_alternative<int>(anchor_rect_list->at(3))) {
+        result->Error("INVALID_VALUE",
+                      "Values for 'anchorRect' must be of type int.");
+        return;
+      }
+      auto const anchor_rect_x{std::get<int>(anchor_rect_list->at(0))};
+      auto const anchor_rect_y{std::get<int>(anchor_rect_list->at(1))};
+      auto const anchor_rect_width{std::get<int>(anchor_rect_list->at(2))};
+      auto const anchor_rect_height{std::get<int>(anchor_rect_list->at(3))};
+
+      // positionerParentAnchor
+      auto const* const positioner_parent_anchor{
+          std::get_if<int>(&positioner_parent_anchor_it->second)};
+      if (!positioner_parent_anchor) {
+        result->Error(
+            "INVALID_VALUE",
+            "Value for 'positionerParentAnchor' must be of type int.");
+        return;
+      }
+
+      // positionerChildAnchor
+      auto const* const positioner_child_anchor{
+          std::get_if<int>(&positioner_child_anchor_it->second)};
+      if (!positioner_child_anchor) {
+        result->Error("INVALID_VALUE",
+                      "Value for 'positionerChildAnchor' must be of type int.");
+        return;
+      }
+      // Convert from anchor (originally a FlutterWindowPositionerAnchor) to
+      // flutter::FlutterWindowPositioner::Gravity
+      auto const gravity{[](flutter::FlutterWindowPositioner::Anchor anchor)
+                             -> flutter::FlutterWindowPositioner::Gravity {
+        switch (anchor) {
+          case flutter::FlutterWindowPositioner::Anchor::none:
+            return flutter::FlutterWindowPositioner::Gravity::none;
+          case flutter::FlutterWindowPositioner::Anchor::top:
+            return flutter::FlutterWindowPositioner::Gravity::bottom;
+          case flutter::FlutterWindowPositioner::Anchor::bottom:
+            return flutter::FlutterWindowPositioner::Gravity::top;
+          case flutter::FlutterWindowPositioner::Anchor::left:
+            return flutter::FlutterWindowPositioner::Gravity::right;
+          case flutter::FlutterWindowPositioner::Anchor::right:
+            return flutter::FlutterWindowPositioner::Gravity::left;
+          case flutter::FlutterWindowPositioner::Anchor::top_left:
+            return flutter::FlutterWindowPositioner::Gravity::bottom_right;
+          case flutter::FlutterWindowPositioner::Anchor::bottom_left:
+            return flutter::FlutterWindowPositioner::Gravity::top_right;
+          case flutter::FlutterWindowPositioner::Anchor::top_right:
+            return flutter::FlutterWindowPositioner::Gravity::bottom_left;
+          case flutter::FlutterWindowPositioner::Anchor::bottom_right:
+            return flutter::FlutterWindowPositioner::Gravity::top_left;
+          default:
+            return flutter::FlutterWindowPositioner::Gravity::none;
+        }
+      }(static_cast<flutter::FlutterWindowPositioner::Anchor>(
+                                 *positioner_child_anchor))};
+
+      // positionerOffset
+      auto const* const positioner_offset_list{
+          std::get_if<std::vector<flutter::EncodableValue>>(
+              &positioner_offset_it->second)};
+      if (positioner_offset_list->size() != 2 ||
+          !std::holds_alternative<int>(size_list->at(0)) ||
+          !std::holds_alternative<int>(size_list->at(1))) {
+        result->Error("INVALID_VALUE",
+                      "Values for 'positionerOffset' must be of type int.");
+        return;
+      }
+      auto const dx{std::get<int>(positioner_offset_list->at(0))};
+      auto const dy{std::get<int>(positioner_offset_list->at(1))};
+
+      // positionerConstraintAdjustment
+      auto const* const positioner_constraint_adjustment{
+          std::get_if<int>(&positioner_constraint_adjustment_it->second)};
+      if (!positioner_constraint_adjustment) {
+        result->Error(
+            "INVALID_VALUE",
+            "Value for 'positionerConstraintAdjustment' must be of type int.");
+        return;
+      }
+
+      flutter::FlutterWindowPositioner const positioner{
+          .anchor_rect = {.x = anchor_rect_x,
+                          .y = anchor_rect_y,
+                          .width = anchor_rect_width,
+                          .height = anchor_rect_height},
+          .anchor = static_cast<flutter::FlutterWindowPositioner::Anchor>(
+              *positioner_parent_anchor),
+          .gravity = gravity,
+          .offset = {.dx = dx, .dy = dy},
+          .constraint_adjustment =
+              static_cast<uint32_t>(*positioner_constraint_adjustment)};
+
+      auto const& [origin,
+                   new_size]{applyPositioner(positioner, size, *parent)};
+
+      if (auto const data{flutter::FlutterWindowController::instance()
+                              .createSatelliteWindow(L"satellite", origin,
+                                                     new_size, *parent)}) {
+        result->Success(encodeWindowCreationResult(data.value()));
+      } else {
+        result->Error("UNAVAILABLE", "Can't create window.");
+      }
+    } else {
+      result->Error("INVALID_VALUE",
+                    "Map does not contain all required keys: "
+                    "{'parent', 'size', 'anchorRect', "
+                    "'positionerParentAnchor', 'positionerChildAnchor', "
+                    "'positionerOffset', 'positionerConstraintAdjustment'}.");
+    }
+  } else {
+    result->Error("INVALID_VALUE", "Value argument is not a map.");
+  }
+}
+
 void handleCreatePopupWindow(flutter::MethodCall<> const& call,
                              std::unique_ptr<flutter::MethodResult<>>& result) {
   auto const* const arguments{call.arguments()};
@@ -647,6 +816,8 @@ void FlutterWindowController::initializeChannel() {
             handleCreateRegularWindow(call, result);
           } else if (call.method_name() == "createDialogWindow") {
             handleCreateDialogWindow(call, result);
+          } else if (call.method_name() == "createSatelliteWindow") {
+            handleCreateSatelliteWindow(call, result);
           } else if (call.method_name() == "createPopupWindow") {
             handleCreatePopupWindow(call, result);
           } else if (call.method_name() == "destroyWindow") {
@@ -748,11 +919,59 @@ auto FlutterWindowController::createDialogWindow(
   return result;
 }
 
+auto FlutterWindowController::createSatelliteWindow(
+    std::wstring const& title,
+    Win32Window::Point const& origin,
+    Win32Window::Size const& size,
+    FlutterViewId parent_view_id)
+    -> std::optional<FlutterWindowCreationResult> {
+  std::unique_lock lock(mutex_);
+  if (!engine_) {
+    std::cerr << "Cannot create satellite without an engine.\n";
+    return std::nullopt;
+  }
+
+  auto* const parent_hwnd{windows_.find(parent_view_id) != windows_.end()
+                              ? windows_[parent_view_id].get()->GetHandle()
+                              : nullptr};
+  if (!parent_hwnd) {
+    std::cerr << "Invalid parent window (view ID " << parent_view_id << ").\n";
+    return std::nullopt;
+  }
+  auto window{std::make_unique<FlutterWin32Window>(engine_)};
+
+  lock.unlock();
+  if (!window->Create(title, size, FlutterWindowArchetype::satellite, origin,
+                      parent_hwnd)) {
+    return std::nullopt;
+  }
+  lock.lock();
+
+  auto const view_id{window->flutter_controller()->view_id()};
+  windows_[view_id] = std::move(window);
+
+  cleanupClosedWindows();
+  sendOnWindowCreated(FlutterWindowArchetype::satellite, view_id,
+                      parent_view_id);
+
+  FlutterWindowCreationResult result{
+      .view_id = view_id,
+      .parent_id = parent_view_id,
+      .archetype = FlutterWindowArchetype::satellite,
+      .size = getWindowSize(view_id)};
+
+  lock.unlock();
+
+  sendOnWindowResized(view_id);
+
+  return result;
+}
+
 auto FlutterWindowController::createPopupWindow(
     std::wstring const& title,
     Win32Window::Point const& origin,
     Win32Window::Size const& size,
-    std::optional<FlutterViewId> parent_view_id)
+    FlutterViewId parent_view_id)
     -> std::optional<FlutterWindowCreationResult> {
   std::unique_lock lock(mutex_);
   if (!engine_) {
@@ -760,12 +979,11 @@ auto FlutterWindowController::createPopupWindow(
     return std::nullopt;
   }
 
-  auto* const parent_hwnd{parent_view_id && windows_.find(*parent_view_id) !=
-                                                windows_.end()
-                              ? windows_[*parent_view_id].get()->GetHandle()
+  auto* const parent_hwnd{windows_.find(parent_view_id) != windows_.end()
+                              ? windows_[parent_view_id].get()->GetHandle()
                               : nullptr};
   if (!parent_hwnd) {
-    std::cerr << "Cannot create popup without a parent window.\n";
+    std::cerr << "Invalid parent window (view ID " << parent_view_id << ").\n";
     return std::nullopt;
   }
   auto window{std::make_unique<FlutterWin32Window>(engine_)};

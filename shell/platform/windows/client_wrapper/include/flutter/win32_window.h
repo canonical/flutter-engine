@@ -145,6 +145,7 @@ class Win32Window {
 
   FlutterWindowArchetype archetype_{FlutterWindowArchetype::regular};
   std::set<Win32Window*> child_popups_;
+  std::set<Win32Window*> child_satellites_;
 
  private:
   friend class WindowClassRegistrar;
@@ -169,6 +170,9 @@ class Win32Window {
 
   // window handle for hosted content.
   HWND child_content_ = nullptr;
+
+  // Offset between the position of this window and the position of its parent.
+  POINT offset_from_parent_{0, 0};
 
   void CloseChildPopups();
 };
