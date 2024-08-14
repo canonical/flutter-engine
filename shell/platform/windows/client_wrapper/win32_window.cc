@@ -2,6 +2,9 @@
 
 #include "include/flutter/flutter_window_controller.h"
 
+#include <iomanip>
+#include <sstream>
+
 #include <dwmapi.h>
 
 namespace {
@@ -10,6 +13,37 @@ constexpr const wchar_t kWindowClassName[] = L"FLUTTER_WIN32_WINDOW";
 
 // The number of Win32Window objects that currently exist.
 int g_active_window_count = 0;
+
+auto getLastErrorAsString() -> std::string {
+  LPWSTR message_buffer{nullptr};
+
+  if (auto const size{FormatMessage(
+          FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+              FORMAT_MESSAGE_IGNORE_INSERTS,
+          nullptr, GetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+          reinterpret_cast<LPTSTR>(&message_buffer), 0, nullptr)}) {
+    std::wstring const wide_message(message_buffer, size);
+    LocalFree(message_buffer);
+    message_buffer = nullptr;
+
+    if (auto const buffer_size{
+            WideCharToMultiByte(CP_UTF8, 0, wide_message.c_str(), -1, nullptr,
+                                0, nullptr, nullptr)}) {
+      std::string message(buffer_size, 0);
+      WideCharToMultiByte(CP_UTF8, 0, wide_message.c_str(), -1, &message[0],
+                          buffer_size, nullptr, nullptr);
+      return message;
+    }
+  }
+
+  if (message_buffer) {
+    LocalFree(message_buffer);
+  }
+  std::ostringstream oss;
+  oss << "Format message failed with 0x" << std::hex << std::setfill('0')
+      << std::setw(8) << GetLastError() << '\n';
+  return oss.str();
+}
 
 // Dynamically loads the |EnableNonClientDpiScaling| from the User32 module.
 // This API is only needed for PerMonitor V1 awareness mode.
@@ -240,7 +274,7 @@ bool Win32Window::Create(std::wstring const& title,
   auto const* window_class{
       WindowClassRegistrar::GetInstance()->GetWindowClass()};
 
-  auto const dpi{[&origin]() -> UINT {
+  auto const dpi{[&origin]() -> double {
     auto const monitor{[&]() -> HMONITOR {
       if (origin) {
         POINT const target_point{static_cast<LONG>(origin->x),
@@ -255,9 +289,9 @@ bool Win32Window::Create(std::wstring const& title,
         return MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
       }
     }()};
-    return FlutterDesktopGetDpiForMonitor(monitor);
+    return static_cast<double>(FlutterDesktopGetDpiForMonitor(monitor));
   }()};
-  auto const scale_factor{dpi / 96.0};
+  auto const scale_factor{dpi / USER_DEFAULT_SCREEN_DPI};
 
   // Scale helper to convert logical scaler values to physical using passed in
   // scale factor
@@ -273,12 +307,15 @@ bool Win32Window::Create(std::wstring const& title,
     return {CW_USEDEFAULT, CW_USEDEFAULT};
   }()};
 
-  auto const window{CreateWindowExW(
+  auto const window{CreateWindowEx(
       extended_window_style, window_class, title.c_str(), window_style, x, y,
       scale(size.width, scale_factor), scale(size.height, scale_factor),
       parent.value_or(nullptr), nullptr, GetModuleHandle(nullptr), this)};
 
   if (!window) {
+    auto const error_message{getLastErrorAsString()};
+    std::cerr << "Cannot create window due to a CreateWindowEx error: "
+              << error_message.c_str() << '\n';
     return false;
   }
 
@@ -479,6 +516,9 @@ void Win32Window::OnDestroy() {
     case FlutterWindowArchetype::tip:
       break;
     default:
+      std::cerr << "Unhandled window archetype encountered in "
+                   "Win32Window::OnDestroy: "
+                << static_cast<int>(archetype_) << "\n";
       std::abort();
   }
 }
