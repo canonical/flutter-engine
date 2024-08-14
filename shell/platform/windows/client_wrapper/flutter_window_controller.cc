@@ -430,7 +430,9 @@ void handleCreateDialogWindow(
 
       if (auto const data{
               flutter::FlutterWindowController::instance().createDialogWindow(
-                  L"dialog", size, origin, *parent)}) {
+                  L"dialog", size, origin,
+                  *parent >= 0 ? std::optional<flutter::FlutterViewId>{*parent}
+                               : std::nullopt)}) {
         result->Success(encodeWindowCreationResult(data.value()));
       } else {
         result->Error("UNAVAILABLE", "Can't create window.");
