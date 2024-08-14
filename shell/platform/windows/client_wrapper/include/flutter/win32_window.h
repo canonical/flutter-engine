@@ -3,6 +3,7 @@
 
 #include <windows.h>
 
+#include <optional>
 #include <set>
 #include <string>
 
@@ -104,10 +105,10 @@ class Win32Window {
   // as appropriate for the default monitor. The window is invisible until
   // |Show| is called. Returns true if the window was created successfully.
   bool Create(std::wstring const& title,
-              Point const& origin,
               Size const& size,
               FlutterWindowArchetype archetype,
-              HWND parent);
+              std::optional<Point> origin,
+              std::optional<HWND> parent);
 
   // Release OS resources associated with window.
   void Destroy();

@@ -2,6 +2,9 @@
 
 #include "include/flutter/flutter_window_controller.h"
 
+#include <iomanip>
+#include <sstream>
+
 #include <dwmapi.h>
 
 namespace {
@@ -10,6 +13,37 @@ constexpr const wchar_t kWindowClassName[] = L"FLUTTER_WIN32_WINDOW";
 
 // The number of Win32Window objects that currently exist.
 int g_active_window_count = 0;
+
+auto getLastErrorAsString() -> std::string {
+  LPWSTR message_buffer{nullptr};
+
+  if (auto const size{FormatMessage(
+          FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+              FORMAT_MESSAGE_IGNORE_INSERTS,
+          nullptr, GetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+          reinterpret_cast<LPTSTR>(&message_buffer), 0, nullptr)}) {
+    std::wstring const wide_message(message_buffer, size);
+    LocalFree(message_buffer);
+    message_buffer = nullptr;
+
+    if (auto const buffer_size{
+            WideCharToMultiByte(CP_UTF8, 0, wide_message.c_str(), -1, nullptr,
+                                0, nullptr, nullptr)}) {
+      std::string message(buffer_size, 0);
+      WideCharToMultiByte(CP_UTF8, 0, wide_message.c_str(), -1, &message[0],
+                          buffer_size, nullptr, nullptr);
+      return message;
+    }
+  }
+
+  if (message_buffer) {
+    LocalFree(message_buffer);
+  }
+  std::ostringstream oss;
+  oss << "Format message failed with 0x" << std::hex << std::setfill('0')
+      << std::setw(8) << GetLastError() << '\n';
+  return oss.str();
+}
 
 // Dynamically loads the |EnableNonClientDpiScaling| from the User32 module.
 // This API is only needed for PerMonitor V1 awareness mode.
@@ -182,44 +216,82 @@ Win32Window::~Win32Window() {
 }
 
 bool Win32Window::Create(std::wstring const& title,
-                         Point const& origin,
                          Size const& size,
                          FlutterWindowArchetype archetype,
-                         HWND parent) {
-  Destroy();
-
+                         std::optional<Point> origin,
+                         std::optional<HWND> parent) {
   archetype_ = archetype;
-
-  wchar_t const* window_class{
-      WindowClassRegistrar::GetInstance()->GetWindowClass()};
-
-  POINT const target_point = {static_cast<LONG>(origin.x),
-                              static_cast<LONG>(origin.y)};
-  HMONITOR const monitor =
-      MonitorFromPoint(target_point, MONITOR_DEFAULTTONEAREST);
-  UINT const dpi = FlutterDesktopGetDpiForMonitor(monitor);
-  auto const scale_factor = dpi / 96.0;
 
   // TODO(loicsharma): Hide the window until the first frame is rendered.
   DWORD window_style{WS_VISIBLE};
+  DWORD extended_window_style{};
 
   switch (archetype) {
     case FlutterWindowArchetype::regular:
       window_style |= WS_OVERLAPPEDWINDOW;
       break;
+    case FlutterWindowArchetype::floating_regular:
+      // TODO
+      break;
+    case FlutterWindowArchetype::dialog:
+      window_style |= WS_OVERLAPPED | WS_CAPTION;
+      extended_window_style |= WS_EX_DLGMODALFRAME;
+      if (!parent) {
+        // If the dialog has no parent, add a minimize box and a system menu
+        // (which includes a close button)
+        window_style |= WS_MINIMIZEBOX | WS_SYSMENU;
+      } else {
+        // If the dialog has a parent, make it modal by disabling the parent
+        // window
+        EnableWindow(*parent, FALSE);
+        // If the parent window has the WS_EX_TOOLWINDOW style, apply the same
+        // style to the dialog
+        if (GetWindowLongPtr(*parent, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) {
+          extended_window_style |= WS_EX_TOOLWINDOW;
+        }
+      }
+      break;
+    case FlutterWindowArchetype::satellite:
+      // TODO
+      break;
     case FlutterWindowArchetype::popup:
-      if (auto* const parent_window{GetThisFromHandle(parent)}) {
+      window_style |= WS_POPUP;
+      if (auto* const parent_window{
+              GetThisFromHandle(parent.value_or(nullptr))}) {
         if (parent_window->child_content_ != nullptr) {
           SetFocus(parent_window->child_content_);
         }
         parent_window->child_popups_.insert(this);
       }
-      window_style |= WS_POPUP;
       break;
-    // TODO: Handle the remaining archetypes
+    case FlutterWindowArchetype::tip:
+      // TODO
+      break;
     default:
       std::abort();
   }
+
+  auto const* window_class{
+      WindowClassRegistrar::GetInstance()->GetWindowClass()};
+
+  auto const dpi{[&origin]() -> double {
+    auto const monitor{[&]() -> HMONITOR {
+      if (origin) {
+        POINT const target_point{static_cast<LONG>(origin->x),
+                                 static_cast<LONG>(origin->y)};
+        return MonitorFromPoint(target_point, MONITOR_DEFAULTTONEAREST);
+      } else {
+        auto const last_active_window{GetForegroundWindow()};
+        if (last_active_window) {
+          return MonitorFromWindow(last_active_window,
+                                   MONITOR_DEFAULTTONEAREST);
+        }
+        return MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
+      }
+    }()};
+    return static_cast<double>(FlutterDesktopGetDpiForMonitor(monitor));
+  }()};
+  auto const scale_factor{dpi / USER_DEFAULT_SCREEN_DPI};
 
   // Scale helper to convert logical scaler values to physical using passed in
   // scale factor
@@ -227,13 +299,23 @@ bool Win32Window::Create(std::wstring const& title,
     return static_cast<int>(source * scale_factor);
   }};
 
-  HWND window{CreateWindow(
-      window_class, title.c_str(), window_style, scale(origin.x, scale_factor),
-      scale(origin.y, scale_factor), scale(size.width, scale_factor),
-      scale(size.height, scale_factor), parent, nullptr,
-      GetModuleHandle(nullptr), this)};
+  auto const [x, y]{[&]() -> std::tuple<int, int> {
+    if (parent && origin) {
+      return {scale(static_cast<LONG>(origin->x), scale_factor),
+              scale(static_cast<LONG>(origin->y), scale_factor)};
+    }
+    return {CW_USEDEFAULT, CW_USEDEFAULT};
+  }()};
+
+  auto const window{CreateWindowEx(
+      extended_window_style, window_class, title.c_str(), window_style, x, y,
+      scale(size.width, scale_factor), scale(size.height, scale_factor),
+      parent.value_or(nullptr), nullptr, GetModuleHandle(nullptr), this)};
 
   if (!window) {
+    auto const error_message{getLastErrorAsString()};
+    std::cerr << "Cannot create window due to a CreateWindowEx error: "
+              << error_message.c_str() << '\n';
     return false;
   }
 
@@ -413,10 +495,31 @@ bool Win32Window::OnCreate() {
 }
 
 void Win32Window::OnDestroy() {
-  if (archetype_ == FlutterWindowArchetype::popup) {
-    if (auto* const parent_window{GetParent(window_handle_)}) {
-      GetThisFromHandle(parent_window)->child_popups_.erase(this);
-    }
+  switch (archetype_) {
+    case FlutterWindowArchetype::regular:
+      break;
+    case FlutterWindowArchetype::floating_regular:
+      break;
+    case FlutterWindowArchetype::dialog:
+      if (auto* const owner_window{GetWindow(window_handle_, GW_OWNER)}) {
+        EnableWindow(owner_window, TRUE);
+        SetForegroundWindow(owner_window);
+      }
+      break;
+    case FlutterWindowArchetype::satellite:
+      break;
+    case FlutterWindowArchetype::popup:
+      if (auto* const parent_window{GetParent(window_handle_)}) {
+        GetThisFromHandle(parent_window)->child_popups_.erase(this);
+      }
+      break;
+    case FlutterWindowArchetype::tip:
+      break;
+    default:
+      std::cerr << "Unhandled window archetype encountered in "
+                   "Win32Window::OnDestroy: "
+                << static_cast<int>(archetype_) << "\n";
+      std::abort();
   }
 }
 

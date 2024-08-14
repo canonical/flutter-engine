@@ -45,8 +45,13 @@ class FlutterWindowController {
 
   void setEngine(std::shared_ptr<FlutterEngine> engine);
   auto createRegularWindow(std::wstring const& title,
-                           Win32Window::Point const& origin,
                            Win32Window::Size const& size)
+      -> std::optional<FlutterWindowCreationResult>;
+  auto createDialogWindow(
+      std::wstring const& title,
+      Win32Window::Size const& size,
+      std::optional<Win32Window::Point> origin,
+      std::optional<FlutterViewId> parent_view_id = std::nullopt)
       -> std::optional<FlutterWindowCreationResult>;
   auto createPopupWindow(
       std::wstring const& title,
