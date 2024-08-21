@@ -59,33 +59,36 @@ auto calculateWindowRect(flutter::Win32Window::Size client_size,
             .bottom = static_cast<LONG>(client_size.height * scale_factor)};
 
   HMODULE const user32_module{LoadLibraryA("User32.dll")};
-  if (!user32_module) {
-    std::cerr << "Critical error: Failed to load User32.dll. Unable to "
-                 "calculate window size.\n";
-    std::abort();
-  }
+  if (user32_module) {
+    using AdjustWindowRectExForDpi = BOOL __stdcall(
+        LPRECT lpRect, DWORD dwStyle, BOOL bMenu, DWORD dwExStyle, UINT dpi);
 
-  using AdjustWindowRectExForDpi = BOOL __stdcall(
-      LPRECT lpRect, DWORD dwStyle, BOOL bMenu, DWORD dwExStyle, UINT dpi);
-
-  auto* const adjust_window_rect_ext_for_dpi{
-      reinterpret_cast<AdjustWindowRectExForDpi*>(
-          GetProcAddress(user32_module, "AdjustWindowRectExForDpi"))};
-  if (adjust_window_rect_ext_for_dpi) {
-    if (!adjust_window_rect_ext_for_dpi(&rect, window_style, FALSE,
-                                        extended_window_style, dpi)) {
-      auto const error_message{getLastErrorAsString()};
-      std::cerr << "Critical error: Failed to run AdjustWindowRectExForDpi: "
-                << error_message.c_str() << '\n';
-      std::abort();
+    auto* const adjust_window_rect_ext_for_dpi{
+        reinterpret_cast<AdjustWindowRectExForDpi*>(
+            GetProcAddress(user32_module, "AdjustWindowRectExForDpi"))};
+    if (adjust_window_rect_ext_for_dpi) {
+      if (adjust_window_rect_ext_for_dpi(&rect, window_style, FALSE,
+                                         extended_window_style, dpi)) {
+        FreeLibrary(user32_module);
+        return rect;
+      } else {
+        std::cerr << "Failed to run AdjustWindowRectExForDpi: "
+                  << getLastErrorAsString() << '\n';
+      }
+    } else {
+      std::cerr << "Failed to retrieve AdjustWindowRectExForDpi address from "
+                   "User32.dll.\n";
     }
-
+    FreeLibrary(user32_module);
   } else {
-    std::cerr << "Critical error: Failed to retrieve AdjustWindowRectExForDpi "
-                 "address from User32.dll.\n";
-    std::abort();
+    std::cerr << "Failed to load User32.dll.\n";
   }
-  FreeLibrary(user32_module);
+
+  if (!AdjustWindowRectEx(&rect, window_style, FALSE, extended_window_style)) {
+    std::cerr << "Failed to run AdjustWindowRectEx: " << getLastErrorAsString()
+              << '\n';
+    return rect;
+  }
 
   return rect;
 }
