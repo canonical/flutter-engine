@@ -70,7 +70,7 @@ struct FlutterWindowPositioner {
     resize_y = 32
   };
 
-  Rect anchor_rect;
+  std::optional<Rect> anchor_rect;
   Anchor anchor;
   Gravity gravity;
   Offset offset;
