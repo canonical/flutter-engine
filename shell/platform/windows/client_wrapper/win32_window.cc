@@ -286,8 +286,7 @@ bool Win32Window::Create(std::wstring const& title,
                          std::optional<HWND> parent) {
   archetype_ = archetype;
 
-  // TODO(loicsharma): Hide the window until the first frame is rendered.
-  DWORD window_style{WS_VISIBLE};
+  DWORD window_style{};
   DWORD extended_window_style{};
 
   switch (archetype) {
@@ -400,15 +399,31 @@ bool Win32Window::Create(std::wstring const& title,
       window_size.cx, window_size.cy, parent.value_or(nullptr), nullptr,
       GetModuleHandle(nullptr), this)};
 
-  if (parent) {
-    offset_from_parent_ = CalculateWindowOffset(window, *parent);
-  }
-
   if (!window) {
     auto const error_message{getLastErrorAsString()};
     std::cerr << "Cannot create window due to a CreateWindowEx error: "
               << error_message.c_str() << '\n';
     return false;
+  }
+
+  // Adjust the window position so that its origin point is the top-left
+  // corner of the window frame
+  RECT frame_rect;
+  DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &frame_rect,
+                        sizeof(frame_rect));
+  RECT window_rect;
+  GetWindowRect(window, &window_rect);
+  auto const left_dropshadow_width{frame_rect.left - window_rect.left};
+  auto const top_dropshadow_height{window_rect.top - frame_rect.top};
+  SetWindowPos(window, nullptr, window_rect.left - left_dropshadow_width,
+               window_rect.top - top_dropshadow_height, 0, 0,
+               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+  // TODO(loicsharma): Hide the window until the first frame is rendered.
+  ShowWindow(window, SW_SHOW);
+
+  if (parent) {
+    offset_from_parent_ = CalculateWindowOffset(window, *parent);
   }
 
   UpdateTheme(window);

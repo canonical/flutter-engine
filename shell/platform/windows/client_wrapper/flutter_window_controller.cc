@@ -119,6 +119,8 @@ applyPositioner(flutter::FlutterWindowPositioner const& positioner,
     }
   }()};
 
+  // TODO: check if centering is being done correctly
+
   PointF const center{.x = (anchor_rect.left + anchor_rect.right) / 2.0,
                       .y = (anchor_rect.top + anchor_rect.bottom) / 2.0};
   PointF child_size{size.width * dpr, size.height * dpr};
