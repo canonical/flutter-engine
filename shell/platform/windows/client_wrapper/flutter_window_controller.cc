@@ -530,11 +530,15 @@ void handleCreatePopupWindow(flutter::MethodCall<> const& call,
       if (auto const* const anchor_rect_list{
               std::get_if<std::vector<flutter::EncodableValue>>(
                   &anchor_rect_it->second)}) {
-        if (anchor_rect_list->size() != 4 ||
-            !std::holds_alternative<int>(anchor_rect_list->at(0)) ||
-            !std::holds_alternative<int>(anchor_rect_list->at(1)) ||
-            !std::holds_alternative<int>(anchor_rect_list->at(2)) ||
-            !std::holds_alternative<int>(anchor_rect_list->at(3))) {
+        if (anchor_rect_list->size() != 4) {
+          result->Error(
+              "INVALID_VALUE",
+              "Values for 'anchorRect' must be an array of 4 integers.");
+          return;
+        } else if (!std::holds_alternative<int>(anchor_rect_list->at(0)) ||
+                   !std::holds_alternative<int>(anchor_rect_list->at(1)) ||
+                   !std::holds_alternative<int>(anchor_rect_list->at(2)) ||
+                   !std::holds_alternative<int>(anchor_rect_list->at(3))) {
           result->Error("INVALID_VALUE",
                         "Values for 'anchorRect' must be of type int.");
           return;
