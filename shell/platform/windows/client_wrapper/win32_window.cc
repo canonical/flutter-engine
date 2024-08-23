@@ -258,9 +258,13 @@ bool Win32Window::Create(std::wstring const& title,
         window_style |= WS_MINIMIZEBOX | WS_SYSMENU;
       } else {
         // If the dialog has a parent, make it modal by disabling the parent
-        // window
-        // TODO: also disable the satellites
+        // window and the parent's satellites
         EnableWindow(*parent, FALSE);
+        auto* const parent_window{GetThisFromHandle(*parent)};
+        for (auto* const satellite : parent_window->child_satellites_) {
+          EnableWindow(satellite->GetHandle(), FALSE);
+        }
+
         // If the parent window has the WS_EX_TOOLWINDOW style, apply the same
         // style to the dialog
         if (GetWindowLongPtr(*parent, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) {
@@ -550,10 +554,15 @@ void Win32Window::OnDestroy() {
     case FlutterWindowArchetype::floating_regular:
       break;
     case FlutterWindowArchetype::dialog:
-      if (auto* const owner_window{GetWindow(window_handle_, GW_OWNER)}) {
-        EnableWindow(owner_window, TRUE);
-        // TODO: Also enable the satellites of the owner_window
-        SetForegroundWindow(owner_window);
+      if (auto* const owner_window_handle{
+              GetWindow(window_handle_, GW_OWNER)}) {
+        EnableWindow(owner_window_handle, TRUE);
+        auto* const owner_window{GetThisFromHandle(owner_window_handle)};
+        for (auto* const satellite : owner_window->child_satellites_) {
+          EnableWindow(satellite->GetHandle(), TRUE);
+        }
+
+        SetForegroundWindow(owner_window_handle);
       }
       break;
     case FlutterWindowArchetype::satellite:
