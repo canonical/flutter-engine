@@ -61,33 +61,66 @@ applyPositioner(flutter::FlutterWindowPositioner const& positioner,
     return GetMonitorInfo(monitor, &mi) ? mi.rcMonitor : RECT{0, 0, 0, 0};
   }(parent_hwnd)};
 
-  RECT frame;
-  if (FAILED(DwmGetWindowAttribute(parent_hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,
-                                   &frame, sizeof(frame)))) {
-    GetWindowRect(parent_hwnd, &frame);
-  }
-
   struct RectF {
     double left;
     double top;
     double right;
     double bottom;
   };
-
   struct PointF {
     double x;
     double y;
   };
-  RectF const cropped_frame{
-      .left = frame.left + positioner.anchor_rect.x * dpr,
-      .top = frame.top + positioner.anchor_rect.y * dpr,
-      .right = frame.left +
-               (positioner.anchor_rect.x + positioner.anchor_rect.width) * dpr,
-      .bottom =
-          frame.top +
-          (positioner.anchor_rect.y + positioner.anchor_rect.height) * dpr};
-  PointF const center{.x = (cropped_frame.left + cropped_frame.right) / 2.0,
-                      .y = (cropped_frame.top + cropped_frame.bottom) / 2.0};
+
+  auto const anchor_rect{[&]() -> RectF {
+    if (positioner.anchor_rect) {
+      // If the positioner's anchor rect is not std::nullopt, use it to anchor
+      // relative to the client area
+      RECT rect;
+      GetClientRect(parent_hwnd, &rect);
+      POINT top_left{rect.left, rect.top};
+      ClientToScreen(parent_hwnd, &top_left);
+      POINT bottom_right{rect.right, rect.bottom};
+      ClientToScreen(parent_hwnd, &bottom_right);
+
+      RectF anchor_rect_screen_space{
+          .left = top_left.x + positioner.anchor_rect->x * dpr,
+          .top = top_left.y + positioner.anchor_rect->y * dpr,
+          .right =
+              top_left.x +
+              (positioner.anchor_rect->x + positioner.anchor_rect->width) * dpr,
+          .bottom = top_left.y + (positioner.anchor_rect->y +
+                                  positioner.anchor_rect->height) *
+                                     dpr};
+      // Ensure the anchor rect stays within the bounds of the client rect
+      anchor_rect_screen_space.left = std::clamp(
+          anchor_rect_screen_space.left, static_cast<double>(top_left.x),
+          static_cast<double>(bottom_right.x));
+      anchor_rect_screen_space.top = std::clamp(
+          anchor_rect_screen_space.top, static_cast<double>(top_left.y),
+          static_cast<double>(bottom_right.y));
+      anchor_rect_screen_space.right = std::clamp(
+          anchor_rect_screen_space.right, static_cast<double>(top_left.x),
+          static_cast<double>(bottom_right.x));
+      anchor_rect_screen_space.bottom = std::clamp(
+          anchor_rect_screen_space.bottom, static_cast<double>(top_left.y),
+          static_cast<double>(bottom_right.y));
+      return anchor_rect_screen_space;
+    } else {
+      // If the positioner's anchor rect is std::nullopt, create an anchor rect
+      // that is equal to the window frame area
+      RECT frame_rect;
+      DwmGetWindowAttribute(parent_hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,
+                            &frame_rect, sizeof(frame_rect));
+      return {static_cast<double>(frame_rect.left),
+              static_cast<double>(frame_rect.top),
+              static_cast<double>(frame_rect.right),
+              static_cast<double>(frame_rect.bottom)};
+    }
+  }()};
+
+  PointF const center{.x = (anchor_rect.left + anchor_rect.right) / 2.0,
+                      .y = (anchor_rect.top + anchor_rect.bottom) / 2.0};
   PointF child_size{size.width * dpr, size.height * dpr};
   PointF const child_center{child_size.x / 2.0, child_size.y / 2.0};
 
@@ -95,21 +128,21 @@ applyPositioner(flutter::FlutterWindowPositioner const& positioner,
       [&](flutter::FlutterWindowPositioner::Anchor anchor) -> PointF {
         switch (anchor) {
           case flutter::FlutterWindowPositioner::Anchor::top:
-            return {center.x, cropped_frame.top};
+            return {center.x, anchor_rect.top};
           case flutter::FlutterWindowPositioner::Anchor::bottom:
-            return {center.x, cropped_frame.bottom};
+            return {center.x, anchor_rect.bottom};
           case flutter::FlutterWindowPositioner::Anchor::left:
-            return {cropped_frame.left, center.y};
+            return {anchor_rect.left, center.y};
           case flutter::FlutterWindowPositioner::Anchor::right:
-            return {cropped_frame.right, center.y};
+            return {anchor_rect.right, center.y};
           case flutter::FlutterWindowPositioner::Anchor::top_left:
-            return {cropped_frame.left, cropped_frame.top};
+            return {anchor_rect.left, anchor_rect.top};
           case flutter::FlutterWindowPositioner::Anchor::bottom_left:
-            return {cropped_frame.left, cropped_frame.bottom};
+            return {anchor_rect.left, anchor_rect.bottom};
           case flutter::FlutterWindowPositioner::Anchor::top_right:
-            return {cropped_frame.right, cropped_frame.top};
+            return {anchor_rect.right, anchor_rect.top};
           case flutter::FlutterWindowPositioner::Anchor::bottom_right:
-            return {cropped_frame.right, cropped_frame.bottom};
+            return {anchor_rect.right, anchor_rect.bottom};
           default:
             return center;
         }
@@ -494,22 +527,29 @@ void handleCreateSatelliteWindow(
                                             static_cast<unsigned int>(height)};
 
       // anchorRect
-      auto const* const anchor_rect_list{
-          std::get_if<std::vector<flutter::EncodableValue>>(
-              &anchor_rect_it->second)};
-      if (anchor_rect_list->size() != 4 ||
-          !std::holds_alternative<int>(anchor_rect_list->at(0)) ||
-          !std::holds_alternative<int>(anchor_rect_list->at(1)) ||
-          !std::holds_alternative<int>(anchor_rect_list->at(2)) ||
-          !std::holds_alternative<int>(anchor_rect_list->at(3))) {
-        result->Error("INVALID_VALUE",
-                      "Values for 'anchorRect' must be of type int.");
-        return;
+      std::optional<flutter::FlutterWindowPositioner::Rect> anchor_rect;
+      if (auto const* const anchor_rect_list{
+              std::get_if<std::vector<flutter::EncodableValue>>(
+                  &anchor_rect_it->second)}) {
+        if (anchor_rect_list->size() != 4) {
+          result->Error(
+              "INVALID_VALUE",
+              "Values for 'anchorRect' must be an array of 4 integers.");
+          return;
+        } else if (!std::holds_alternative<int>(anchor_rect_list->at(0)) ||
+                   !std::holds_alternative<int>(anchor_rect_list->at(1)) ||
+                   !std::holds_alternative<int>(anchor_rect_list->at(2)) ||
+                   !std::holds_alternative<int>(anchor_rect_list->at(3))) {
+          result->Error("INVALID_VALUE",
+                        "Values for 'anchorRect' must be of type int.");
+          return;
+        }
+        anchor_rect = flutter::FlutterWindowPositioner::Rect{
+            .x = std::get<int>(anchor_rect_list->at(0)),
+            .y = std::get<int>(anchor_rect_list->at(1)),
+            .width = std::get<int>(anchor_rect_list->at(2)),
+            .height = std::get<int>(anchor_rect_list->at(3))};
       }
-      auto const anchor_rect_x{std::get<int>(anchor_rect_list->at(0))};
-      auto const anchor_rect_y{std::get<int>(anchor_rect_list->at(1))};
-      auto const anchor_rect_width{std::get<int>(anchor_rect_list->at(2))};
-      auto const anchor_rect_height{std::get<int>(anchor_rect_list->at(3))};
 
       // positionerParentAnchor
       auto const* const positioner_parent_anchor{
@@ -583,10 +623,7 @@ void handleCreateSatelliteWindow(
       }
 
       flutter::FlutterWindowPositioner const positioner{
-          .anchor_rect = {.x = anchor_rect_x,
-                          .y = anchor_rect_y,
-                          .width = anchor_rect_width,
-                          .height = anchor_rect_height},
+          .anchor_rect = anchor_rect,
           .anchor = static_cast<flutter::FlutterWindowPositioner::Anchor>(
               *positioner_parent_anchor),
           .gravity = gravity,
@@ -662,22 +699,29 @@ void handleCreatePopupWindow(flutter::MethodCall<> const& call,
                                             static_cast<unsigned int>(height)};
 
       // anchorRect
-      auto const* const anchor_rect_list{
-          std::get_if<std::vector<flutter::EncodableValue>>(
-              &anchor_rect_it->second)};
-      if (anchor_rect_list->size() != 4 ||
-          !std::holds_alternative<int>(anchor_rect_list->at(0)) ||
-          !std::holds_alternative<int>(anchor_rect_list->at(1)) ||
-          !std::holds_alternative<int>(anchor_rect_list->at(2)) ||
-          !std::holds_alternative<int>(anchor_rect_list->at(3))) {
-        result->Error("INVALID_VALUE",
-                      "Values for 'anchorRect' must be of type int.");
-        return;
+      std::optional<flutter::FlutterWindowPositioner::Rect> anchor_rect;
+      if (auto const* const anchor_rect_list{
+              std::get_if<std::vector<flutter::EncodableValue>>(
+                  &anchor_rect_it->second)}) {
+        if (anchor_rect_list->size() != 4) {
+          result->Error(
+              "INVALID_VALUE",
+              "Values for 'anchorRect' must be an array of 4 integers.");
+          return;
+        } else if (!std::holds_alternative<int>(anchor_rect_list->at(0)) ||
+                   !std::holds_alternative<int>(anchor_rect_list->at(1)) ||
+                   !std::holds_alternative<int>(anchor_rect_list->at(2)) ||
+                   !std::holds_alternative<int>(anchor_rect_list->at(3))) {
+          result->Error("INVALID_VALUE",
+                        "Values for 'anchorRect' must be of type int.");
+          return;
+        }
+        anchor_rect = flutter::FlutterWindowPositioner::Rect{
+            .x = std::get<int>(anchor_rect_list->at(0)),
+            .y = std::get<int>(anchor_rect_list->at(1)),
+            .width = std::get<int>(anchor_rect_list->at(2)),
+            .height = std::get<int>(anchor_rect_list->at(3))};
       }
-      auto const anchor_rect_x{std::get<int>(anchor_rect_list->at(0))};
-      auto const anchor_rect_y{std::get<int>(anchor_rect_list->at(1))};
-      auto const anchor_rect_width{std::get<int>(anchor_rect_list->at(2))};
-      auto const anchor_rect_height{std::get<int>(anchor_rect_list->at(3))};
 
       // positionerParentAnchor
       auto const* const positioner_parent_anchor{
@@ -751,10 +795,7 @@ void handleCreatePopupWindow(flutter::MethodCall<> const& call,
       }
 
       flutter::FlutterWindowPositioner const positioner{
-          .anchor_rect = {.x = anchor_rect_x,
-                          .y = anchor_rect_y,
-                          .width = anchor_rect_width,
-                          .height = anchor_rect_height},
+          .anchor_rect = anchor_rect,
           .anchor = static_cast<flutter::FlutterWindowPositioner::Anchor>(
               *positioner_parent_anchor),
           .gravity = gravity,

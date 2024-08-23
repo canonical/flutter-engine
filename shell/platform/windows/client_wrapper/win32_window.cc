@@ -45,10 +45,58 @@ auto getLastErrorAsString() -> std::string {
   return oss.str();
 }
 
+// Calculates the required window rectangle, in physical coordinates, that
+// will accomodate the requested client size given in logical coordinates.
+// The window rectangle accounts for window borders and non-client areas.
+auto calculateWindowRect(flutter::Win32Window::Size client_size,
+                         DWORD window_style,
+                         DWORD extended_window_style,
+                         UINT dpi) -> RECT {
+  auto const scale_factor{static_cast<double>(dpi) / USER_DEFAULT_SCREEN_DPI};
+  RECT rect{.left = 0,
+            .top = 0,
+            .right = static_cast<LONG>(client_size.width * scale_factor),
+            .bottom = static_cast<LONG>(client_size.height * scale_factor)};
+
+  HMODULE const user32_module{LoadLibraryA("User32.dll")};
+  if (user32_module) {
+    using AdjustWindowRectExForDpi = BOOL __stdcall(
+        LPRECT lpRect, DWORD dwStyle, BOOL bMenu, DWORD dwExStyle, UINT dpi);
+
+    auto* const adjust_window_rect_ext_for_dpi{
+        reinterpret_cast<AdjustWindowRectExForDpi*>(
+            GetProcAddress(user32_module, "AdjustWindowRectExForDpi"))};
+    if (adjust_window_rect_ext_for_dpi) {
+      if (adjust_window_rect_ext_for_dpi(&rect, window_style, FALSE,
+                                         extended_window_style, dpi)) {
+        FreeLibrary(user32_module);
+        return rect;
+      } else {
+        std::cerr << "Failed to run AdjustWindowRectExForDpi: "
+                  << getLastErrorAsString() << '\n';
+      }
+    } else {
+      std::cerr << "Failed to retrieve AdjustWindowRectExForDpi address from "
+                   "User32.dll.\n";
+    }
+    FreeLibrary(user32_module);
+  } else {
+    std::cerr << "Failed to load User32.dll.\n";
+  }
+
+  if (!AdjustWindowRectEx(&rect, window_style, FALSE, extended_window_style)) {
+    std::cerr << "Failed to run AdjustWindowRectEx: " << getLastErrorAsString()
+              << '\n';
+    return rect;
+  }
+
+  return rect;
+}
+
 // Calculate the offset between the position of a window and the position of its
 // parent.
 POINT CalculateWindowOffset(HWND window, HWND parent) {
-  POINT offset = {0, 0};
+  POINT offset{0, 0};
   if (window && parent) {
     RECT window_rect;
     RECT parent_rect;
@@ -232,7 +280,7 @@ Win32Window::~Win32Window() {
 }
 
 bool Win32Window::Create(std::wstring const& title,
-                         Size const& size,
+                         Size const& client_size,
                          FlutterWindowArchetype archetype,
                          std::optional<Point> origin,
                          std::optional<HWND> parent) {
@@ -303,7 +351,11 @@ bool Win32Window::Create(std::wstring const& title,
   auto const* window_class{
       WindowClassRegistrar::GetInstance()->GetWindowClass()};
 
-  auto const dpi{[&origin]() -> double {
+  // Get the DPI for the monitor that is nearest to the specified origin point.
+  // If no origin point is provided, use the monitor that is nearest to the
+  // currently active window. If no active window is found, fall back to the
+  // monitor that contains the point (0, 0).
+  auto const dpi{[&origin]() -> UINT {
     auto const monitor{[&]() -> HMONITOR {
       if (origin) {
         POINT const target_point{static_cast<LONG>(origin->x),
@@ -318,28 +370,35 @@ bool Win32Window::Create(std::wstring const& title,
         return MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
       }
     }()};
-    return static_cast<double>(FlutterDesktopGetDpiForMonitor(monitor));
+    return FlutterDesktopGetDpiForMonitor(monitor);
   }()};
-  auto const scale_factor{dpi / USER_DEFAULT_SCREEN_DPI};
 
-  // Scale helper to convert logical scaler values to physical using passed in
-  // scale factor
-  auto const scale{[](int source, double scale_factor) {
-    return static_cast<int>(source * scale_factor);
-  }};
-
+  // Compute the x and y coordinates of the window, in physical coordinates.
+  // Default positioning values (CW_USEDEFAULT) are used if the window
+  // has no parent or if the origin point is not provided.
   auto const [x, y]{[&]() -> std::tuple<int, int> {
     if (parent && origin) {
-      return {scale(static_cast<LONG>(origin->x), scale_factor),
-              scale(static_cast<LONG>(origin->y), scale_factor)};
+      auto const scale_factor{static_cast<double>(dpi) /
+                              USER_DEFAULT_SCREEN_DPI};
+      return {static_cast<int>(origin->x * scale_factor),
+              static_cast<int>(origin->y * scale_factor)};
     }
     return {CW_USEDEFAULT, CW_USEDEFAULT};
   }()};
 
+  // Get the physical coordinates of the top-left and bottom-right corners
+  // of the window to accomodate the desired client area
+  auto const window_size{[&]() -> SIZE {
+    auto const window_rect{calculateWindowRect(client_size, window_style,
+                                               extended_window_style, dpi)};
+    return {window_rect.right - window_rect.left,
+            window_rect.bottom - window_rect.top};
+  }()};
+
   auto const window{CreateWindowEx(
       extended_window_style, window_class, title.c_str(), window_style, x, y,
-      scale(size.width, scale_factor), scale(size.height, scale_factor),
-      parent.value_or(nullptr), nullptr, GetModuleHandle(nullptr), this)};
+      window_size.cx, window_size.cy, parent.value_or(nullptr), nullptr,
+      GetModuleHandle(nullptr), this)};
 
   if (parent) {
     offset_from_parent_ = CalculateWindowOffset(window, *parent);
