@@ -48,7 +48,8 @@ auto getLastErrorAsString() -> std::string {
 
 std::tuple<flutter::Win32Window::Point, flutter::Win32Window::Size>
 applyPositioner(flutter::FlutterWindowPositioner const& positioner,
-                flutter::Win32Window::Size const& size,
+                flutter::Win32Window::Size const& window_size,
+                flutter::Win32Window::Size const& frame_size,
                 HWND parent_hwnd) {
   auto const dpr{FlutterDesktopGetDpiForHWND(parent_hwnd) /
                  static_cast<double>(USER_DEFAULT_SCREEN_DPI)};
@@ -119,8 +120,8 @@ applyPositioner(flutter::FlutterWindowPositioner const& positioner,
 
   PointF const center{.x = (anchor_rect.left + anchor_rect.right) / 2.0,
                       .y = (anchor_rect.top + anchor_rect.bottom) / 2.0};
-  PointF child_size{static_cast<double>(size.width),
-                    static_cast<double>(size.height)};
+  PointF const child_size{static_cast<double>(frame_size.width),
+                          static_cast<double>(frame_size.height)};
   PointF const child_center{child_size.x / 2.0, child_size.y / 2.0};
 
   auto const get_parent_anchor_point{
@@ -151,7 +152,7 @@ applyPositioner(flutter::FlutterWindowPositioner const& positioner,
       [&](flutter::FlutterWindowPositioner::Gravity gravity) -> PointF {
         switch (gravity) {
           case flutter::FlutterWindowPositioner::Gravity::top:
-            return {-child_center.x, -child_size.x};
+            return {-child_center.x, -child_size.y};
           case flutter::FlutterWindowPositioner::Gravity::bottom:
             return {-child_center.x, 0};
           case flutter::FlutterWindowPositioner::Gravity::left:
@@ -189,6 +190,9 @@ applyPositioner(flutter::FlutterWindowPositioner const& positioner,
       calculate_origin(parent_anchor_point, child_anchor_point, offset)};
 
   // Constraint adjustments
+
+  PointF window_size_constrained{static_cast<double>(window_size.width),
+                                 static_cast<double>(window_size.height)};
 
   auto const is_constrained_along_x{[&]() {
     return origin_dc.x < 0 || origin_dc.x + child_size.x > monitor_rect.right;
@@ -274,13 +278,13 @@ applyPositioner(flutter::FlutterWindowPositioner const& positioner,
       if (origin_dc.x < 0) {
         auto const diff{std::clamp(abs(origin_dc.x), 1.0, child_size.x - 1)};
         origin_dc.x += diff;
-        child_size.x -= diff;
+        window_size_constrained.x -= diff;
       }
       if (origin_dc.x + child_size.x > monitor_rect.right) {
         auto const diff{
             std::clamp((origin_dc.x + child_size.x) - monitor_rect.right, 1.0,
                        child_size.x - 1)};
-        child_size.x -= diff;
+        window_size_constrained.x -= diff;
       }
     }
   }
@@ -362,13 +366,13 @@ applyPositioner(flutter::FlutterWindowPositioner const& positioner,
       if (origin_dc.y < 0) {
         auto const diff{std::clamp(abs(origin_dc.y), 1.0, child_size.y - 1)};
         origin_dc.y += diff;
-        child_size.y -= diff;
+        window_size_constrained.y -= diff;
       }
       if (origin_dc.y + child_size.y > monitor_rect.bottom) {
         auto const diff{
             std::clamp((origin_dc.y + child_size.y) - monitor_rect.bottom, 1.0,
                        child_size.y - 1)};
-        child_size.y -= diff;
+        window_size_constrained.y -= diff;
       }
     }
   }
@@ -377,12 +381,40 @@ applyPositioner(flutter::FlutterWindowPositioner const& positioner,
       static_cast<unsigned int>(origin_dc.x),
       static_cast<unsigned int>(origin_dc.y)};
   flutter::Win32Window::Size const new_size{
-      static_cast<unsigned int>(child_size.x),
-      static_cast<unsigned int>(child_size.y)};
+      static_cast<unsigned int>(window_size_constrained.x),
+      static_cast<unsigned int>(window_size_constrained.y)};
   return {origin_lc, new_size};
 }
 
-// Calculates the required window rectangle, in physical coordinates, that
+// Estimate the window frame, in physical coordinates, for a window
+// with the given style, extended_style and parent window
+auto estimateWindowFrame(flutter::Win32Window::Size window_size,
+                         DWORD window_style,
+                         DWORD extended_window_style,
+                         HWND parent_hwnd) -> RECT {
+  RECT frame_rect{0, 0, static_cast<LONG>(window_size.width),
+                  static_cast<LONG>(window_size.height)};
+
+  WNDCLASS window_class{0};
+  window_class.lpfnWndProc = DefWindowProc;
+  window_class.hInstance = GetModuleHandle(nullptr);
+  window_class.lpszClassName = L"FLUTTER_WIN32_WINDOW_TEMPORARY";
+  RegisterClass(&window_class);
+
+  window_style &= ~WS_VISIBLE;
+  if (auto const window{CreateWindowEx(
+          extended_window_style, window_class.lpszClassName, L"", window_style,
+          CW_USEDEFAULT, CW_USEDEFAULT, window_size.width, window_size.height,
+          parent_hwnd, nullptr, GetModuleHandle(nullptr), nullptr)}) {
+    DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &frame_rect,
+                          sizeof(frame_rect));
+    DestroyWindow(window);
+  }
+
+  return frame_rect;
+}
+
+// Calculate the required window rectangle, in physical coordinates, that
 // will accomodate the requested client size given in logical coordinates.
 // The window rectangle accounts for window borders and non-client areas.
 auto calculateWindowRect(flutter::Win32Window::Size client_size,
@@ -699,9 +731,16 @@ bool Win32Window::Create(std::wstring const& title,
     if (parent) {
       if (positioner) {
         // Adjust origin and size if a positioner is provided
+        auto const window_frame{estimateWindowFrame(window_size, window_style,
+                                                    extended_window_style,
+                                                    parent.value_or(nullptr))};
+        Size window_frame_size{
+            static_cast<unsigned>(window_frame.right - window_frame.left),
+            static_cast<unsigned>(window_frame.bottom - window_frame.top)};
         Point origin{0, 0};
-        std::tie(origin, window_size) = applyPositioner(
-            positioner.value(), window_size, parent.value_or(nullptr));
+        std::tie(origin, window_size) =
+            applyPositioner(positioner.value(), window_size, window_frame_size,
+                            parent.value_or(nullptr));
         return {origin.x, origin.y};
       } else if (archetype == FlutterWindowArchetype::dialog && parent) {
         // For parented dialogs, center the dialog in the parent frame
