@@ -3,13 +3,10 @@
 #include "include/flutter/encodable_value.h"
 #include "include/flutter/standard_method_codec.h"
 
-#include <algorithm>
-
 #include <dwmapi.h>
 
 namespace {
 auto const* const kChannel{"flutter/windowing"};
-auto const kBaseDpi{static_cast<double>(USER_DEFAULT_SCREEN_DPI)};
 
 // Encodes the attributes of a FlutterWindowCreationResult into an EncodableMap
 // wrapped in an EncodableValue.
@@ -27,362 +24,6 @@ flutter::EncodableValue encodeWindowCreationResult(
        flutter::EncodableValue(result.size.width)},
       {flutter::EncodableValue("height"),
        flutter::EncodableValue((result.size.height))}});
-}
-
-// Returns the origin point that will center a window of size 'size' within the
-// client area of the window identified by 'handle'.
-auto calculateCenteredOrigin(flutter::Win32Window::Size size,
-                             HWND handle) -> flutter::Win32Window::Point {
-  if (RECT frame; handle && GetWindowRect(handle, &frame)) {
-    POINT const target_point{frame.left, frame.top};
-    auto* const monitor{
-        MonitorFromPoint(target_point, MONITOR_DEFAULTTONEAREST)};
-    auto const dpr{FlutterDesktopGetDpiForMonitor(monitor) / kBaseDpi};
-    auto const centered_x{(frame.left + frame.right - size.width * dpr) / 2.0};
-    auto const centered_y{(frame.top + frame.bottom - size.height * dpr) / 2.0};
-    return {static_cast<unsigned int>(centered_x / dpr),
-            static_cast<unsigned int>(centered_y / dpr)};
-  }
-  return {0, 0};
-}
-
-std::tuple<flutter::Win32Window::Point, flutter::Win32Window::Size>
-applyPositioner(flutter::FlutterWindowPositioner const& positioner,
-                flutter::Win32Window::Size const& size,
-                flutter::FlutterViewId parent_view_id) {
-  auto const& windows{flutter::FlutterWindowController::instance().windows()};
-  auto const& parent_window{windows.at(parent_view_id)};
-  auto const& parent_hwnd{parent_window->GetHandle()};
-  auto const dpr{FlutterDesktopGetDpiForHWND(parent_hwnd) / kBaseDpi};
-  auto const monitor_rect{[](HWND hwnd) -> RECT {
-    auto* monitor{MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)};
-    MONITORINFO mi;
-    mi.cbSize = sizeof(MONITORINFO);
-    return GetMonitorInfo(monitor, &mi) ? mi.rcMonitor : RECT{0, 0, 0, 0};
-  }(parent_hwnd)};
-
-  struct RectF {
-    double left;
-    double top;
-    double right;
-    double bottom;
-  };
-  struct PointF {
-    double x;
-    double y;
-  };
-
-  auto const anchor_rect{[&]() -> RectF {
-    if (positioner.anchor_rect) {
-      // If the positioner's anchor rect is not std::nullopt, use it to anchor
-      // relative to the client area
-      RECT rect;
-      GetClientRect(parent_hwnd, &rect);
-      POINT top_left{rect.left, rect.top};
-      ClientToScreen(parent_hwnd, &top_left);
-      POINT bottom_right{rect.right, rect.bottom};
-      ClientToScreen(parent_hwnd, &bottom_right);
-
-      RectF anchor_rect_screen_space{
-          .left = top_left.x + positioner.anchor_rect->x * dpr,
-          .top = top_left.y + positioner.anchor_rect->y * dpr,
-          .right =
-              top_left.x +
-              (positioner.anchor_rect->x + positioner.anchor_rect->width) * dpr,
-          .bottom = top_left.y + (positioner.anchor_rect->y +
-                                  positioner.anchor_rect->height) *
-                                     dpr};
-      // Ensure the anchor rect stays within the bounds of the client rect
-      anchor_rect_screen_space.left = std::clamp(
-          anchor_rect_screen_space.left, static_cast<double>(top_left.x),
-          static_cast<double>(bottom_right.x));
-      anchor_rect_screen_space.top = std::clamp(
-          anchor_rect_screen_space.top, static_cast<double>(top_left.y),
-          static_cast<double>(bottom_right.y));
-      anchor_rect_screen_space.right = std::clamp(
-          anchor_rect_screen_space.right, static_cast<double>(top_left.x),
-          static_cast<double>(bottom_right.x));
-      anchor_rect_screen_space.bottom = std::clamp(
-          anchor_rect_screen_space.bottom, static_cast<double>(top_left.y),
-          static_cast<double>(bottom_right.y));
-      return anchor_rect_screen_space;
-    } else {
-      // If the positioner's anchor rect is std::nullopt, create an anchor rect
-      // that is equal to the window frame area
-      RECT frame_rect;
-      DwmGetWindowAttribute(parent_hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,
-                            &frame_rect, sizeof(frame_rect));
-      return {static_cast<double>(frame_rect.left),
-              static_cast<double>(frame_rect.top),
-              static_cast<double>(frame_rect.right),
-              static_cast<double>(frame_rect.bottom)};
-    }
-  }()};
-
-  // TODO: check if centering is being done correctly
-
-  PointF const center{.x = (anchor_rect.left + anchor_rect.right) / 2.0,
-                      .y = (anchor_rect.top + anchor_rect.bottom) / 2.0};
-  PointF child_size{size.width * dpr, size.height * dpr};
-  PointF const child_center{child_size.x / 2.0, child_size.y / 2.0};
-
-  auto const get_parent_anchor_point{
-      [&](flutter::FlutterWindowPositioner::Anchor anchor) -> PointF {
-        switch (anchor) {
-          case flutter::FlutterWindowPositioner::Anchor::top:
-            return {center.x, anchor_rect.top};
-          case flutter::FlutterWindowPositioner::Anchor::bottom:
-            return {center.x, anchor_rect.bottom};
-          case flutter::FlutterWindowPositioner::Anchor::left:
-            return {anchor_rect.left, center.y};
-          case flutter::FlutterWindowPositioner::Anchor::right:
-            return {anchor_rect.right, center.y};
-          case flutter::FlutterWindowPositioner::Anchor::top_left:
-            return {anchor_rect.left, anchor_rect.top};
-          case flutter::FlutterWindowPositioner::Anchor::bottom_left:
-            return {anchor_rect.left, anchor_rect.bottom};
-          case flutter::FlutterWindowPositioner::Anchor::top_right:
-            return {anchor_rect.right, anchor_rect.top};
-          case flutter::FlutterWindowPositioner::Anchor::bottom_right:
-            return {anchor_rect.right, anchor_rect.bottom};
-          default:
-            return center;
-        }
-      }};
-
-  auto const get_child_anchor_point{
-      [&](flutter::FlutterWindowPositioner::Gravity gravity) -> PointF {
-        switch (gravity) {
-          case flutter::FlutterWindowPositioner::Gravity::top:
-            return {-child_center.x, -child_size.x};
-          case flutter::FlutterWindowPositioner::Gravity::bottom:
-            return {-child_center.x, 0};
-          case flutter::FlutterWindowPositioner::Gravity::left:
-            return {-child_size.x, -child_center.y};
-          case flutter::FlutterWindowPositioner::Gravity::right:
-            return {0, -child_center.y};
-          case flutter::FlutterWindowPositioner::Gravity::top_left:
-            return {-child_size.x, -child_size.y};
-          case flutter::FlutterWindowPositioner::Gravity::bottom_left:
-            return {-child_size.x, 0};
-          case flutter::FlutterWindowPositioner::Gravity::top_right:
-            return {0, -child_size.y};
-          case flutter::FlutterWindowPositioner::Gravity::bottom_right:
-            return {0, 0};
-          default:
-            return {-child_center.x, -child_center.y};
-        }
-      }};
-
-  auto const calculate_origin{[](PointF const& parent_anchor,
-                                 PointF const& child_anchor,
-                                 PointF const& offset) -> PointF {
-    return {.x = parent_anchor.x + child_anchor.x + offset.x,
-            .y = parent_anchor.y + child_anchor.y + offset.y};
-  }};
-
-  auto anchor{positioner.anchor};
-  auto gravity{positioner.gravity};
-  PointF offset{static_cast<double>(positioner.offset.dx),
-                static_cast<double>(positioner.offset.dy)};
-
-  auto parent_anchor_point{get_parent_anchor_point(anchor)};
-  auto child_anchor_point{get_child_anchor_point(gravity)};
-  PointF origin_dc{
-      calculate_origin(parent_anchor_point, child_anchor_point, offset)};
-
-  // Constraint adjustments
-
-  auto const is_constrained_along_x{[&]() {
-    return origin_dc.x < 0 || origin_dc.x + child_size.x > monitor_rect.right;
-  }};
-  auto const is_constrained_along_y{[&]() {
-    return origin_dc.y < 0 || origin_dc.y + child_size.y > monitor_rect.bottom;
-  }};
-
-  // X axis
-  if (is_constrained_along_x()) {
-    auto const reverse_anchor_along_x{
-        [](flutter::FlutterWindowPositioner::Anchor anchor) {
-          switch (anchor) {
-            case flutter::FlutterWindowPositioner::Anchor::left:
-              return flutter::FlutterWindowPositioner::Anchor::right;
-            case flutter::FlutterWindowPositioner::Anchor::right:
-              return flutter::FlutterWindowPositioner::Anchor::left;
-            case flutter::FlutterWindowPositioner::Anchor::top_left:
-              return flutter::FlutterWindowPositioner::Anchor::top_right;
-            case flutter::FlutterWindowPositioner::Anchor::bottom_left:
-              return flutter::FlutterWindowPositioner::Anchor::bottom_right;
-            case flutter::FlutterWindowPositioner::Anchor::top_right:
-              return flutter::FlutterWindowPositioner::Anchor::top_left;
-            case flutter::FlutterWindowPositioner::Anchor::bottom_right:
-              return flutter::FlutterWindowPositioner::Anchor::bottom_left;
-            default:
-              return anchor;
-          }
-        }};
-
-    auto const reverse_gravity_along_x{
-        [](flutter::FlutterWindowPositioner::Gravity gravity) {
-          switch (gravity) {
-            case flutter::FlutterWindowPositioner::Gravity::left:
-              return flutter::FlutterWindowPositioner::Gravity::right;
-            case flutter::FlutterWindowPositioner::Gravity::right:
-              return flutter::FlutterWindowPositioner::Gravity::left;
-            case flutter::FlutterWindowPositioner::Gravity::top_left:
-              return flutter::FlutterWindowPositioner::Gravity::top_right;
-            case flutter::FlutterWindowPositioner::Gravity::bottom_left:
-              return flutter::FlutterWindowPositioner::Gravity::bottom_right;
-            case flutter::FlutterWindowPositioner::Gravity::top_right:
-              return flutter::FlutterWindowPositioner::Gravity::top_left;
-            case flutter::FlutterWindowPositioner::Gravity::bottom_right:
-              return flutter::FlutterWindowPositioner::Gravity::bottom_left;
-            default:
-              return gravity;
-          }
-        }};
-
-    if (positioner.constraint_adjustment &
-        static_cast<uint32_t>(
-            flutter::FlutterWindowPositioner::ConstraintAdjustment::flip_x)) {
-      anchor = reverse_anchor_along_x(anchor);
-      gravity = reverse_gravity_along_x(gravity);
-      parent_anchor_point = get_parent_anchor_point(anchor);
-      child_anchor_point = get_child_anchor_point(gravity);
-      auto const saved_origin_dc{std::exchange(
-          origin_dc,
-          calculate_origin(parent_anchor_point, child_anchor_point, offset))};
-      if (is_constrained_along_x()) {
-        origin_dc = saved_origin_dc;
-      }
-    } else if (positioner.constraint_adjustment &
-               static_cast<uint32_t>(flutter::FlutterWindowPositioner::
-                                         ConstraintAdjustment::slide_x)) {
-      // TODO: Slide towards the direction of the gravity first
-      if (origin_dc.x < 0) {
-        auto const diff{abs(origin_dc.x)};
-        offset = {offset.x + diff, offset.y};
-        origin_dc =
-            calculate_origin(parent_anchor_point, child_anchor_point, offset);
-      }
-      if (origin_dc.x + child_size.x > monitor_rect.right) {
-        auto const diff{(origin_dc.x + child_size.x) - monitor_rect.right};
-        offset = {offset.x - diff, offset.y};
-        origin_dc =
-            calculate_origin(parent_anchor_point, child_anchor_point, offset);
-      }
-    } else if (positioner.constraint_adjustment &
-               static_cast<uint32_t>(flutter::FlutterWindowPositioner::
-                                         ConstraintAdjustment::resize_x)) {
-      if (origin_dc.x < 0) {
-        auto const diff{std::clamp(abs(origin_dc.x), 1.0, child_size.x - 1)};
-        origin_dc.x += diff;
-        child_size.x -= diff;
-      }
-      if (origin_dc.x + child_size.x > monitor_rect.right) {
-        auto const diff{
-            std::clamp((origin_dc.x + child_size.x) - monitor_rect.right, 1.0,
-                       child_size.x - 1)};
-        child_size.x -= diff;
-      }
-    }
-  }
-
-  // Y axis
-  if (is_constrained_along_y()) {
-    auto const reverse_anchor_along_y{
-        [](flutter::FlutterWindowPositioner::Anchor anchor) {
-          switch (anchor) {
-            case flutter::FlutterWindowPositioner::Anchor::top:
-              return flutter::FlutterWindowPositioner::Anchor::bottom;
-            case flutter::FlutterWindowPositioner::Anchor::bottom:
-              return flutter::FlutterWindowPositioner::Anchor::top;
-            case flutter::FlutterWindowPositioner::Anchor::top_left:
-              return flutter::FlutterWindowPositioner::Anchor::bottom_left;
-            case flutter::FlutterWindowPositioner::Anchor::bottom_left:
-              return flutter::FlutterWindowPositioner::Anchor::top_left;
-            case flutter::FlutterWindowPositioner::Anchor::top_right:
-              return flutter::FlutterWindowPositioner::Anchor::bottom_right;
-            case flutter::FlutterWindowPositioner::Anchor::bottom_right:
-              return flutter::FlutterWindowPositioner::Anchor::top_right;
-            default:
-              return anchor;
-          }
-        }};
-
-    auto const reverse_gravity_along_y{
-        [](flutter::FlutterWindowPositioner::Gravity gravity) {
-          switch (gravity) {
-            case flutter::FlutterWindowPositioner::Gravity::top:
-              return flutter::FlutterWindowPositioner::Gravity::bottom;
-            case flutter::FlutterWindowPositioner::Gravity::bottom:
-              return flutter::FlutterWindowPositioner::Gravity::top;
-            case flutter::FlutterWindowPositioner::Gravity::top_left:
-              return flutter::FlutterWindowPositioner::Gravity::bottom_left;
-            case flutter::FlutterWindowPositioner::Gravity::bottom_left:
-              return flutter::FlutterWindowPositioner::Gravity::top_left;
-            case flutter::FlutterWindowPositioner::Gravity::top_right:
-              return flutter::FlutterWindowPositioner::Gravity::bottom_right;
-            case flutter::FlutterWindowPositioner::Gravity::bottom_right:
-              return flutter::FlutterWindowPositioner::Gravity::top_right;
-            default:
-              return gravity;
-          }
-        }};
-
-    if (positioner.constraint_adjustment &
-        static_cast<uint32_t>(
-            flutter::FlutterWindowPositioner::ConstraintAdjustment::flip_y)) {
-      anchor = reverse_anchor_along_y(anchor);
-      gravity = reverse_gravity_along_y(gravity);
-      parent_anchor_point = get_parent_anchor_point(anchor);
-      child_anchor_point = get_child_anchor_point(gravity);
-      auto const saved_origin_dc{std::exchange(
-          origin_dc,
-          calculate_origin(parent_anchor_point, child_anchor_point, offset))};
-      if (is_constrained_along_y()) {
-        origin_dc = saved_origin_dc;
-      }
-    } else if (positioner.constraint_adjustment &
-               static_cast<uint32_t>(flutter::FlutterWindowPositioner::
-                                         ConstraintAdjustment::slide_y)) {
-      // TODO: Slide towards the direction of the gravity first
-      if (origin_dc.y < 0) {
-        auto const diff{abs(origin_dc.y)};
-        offset = {offset.x, offset.y + diff};
-        origin_dc =
-            calculate_origin(parent_anchor_point, child_anchor_point, offset);
-      }
-      if (origin_dc.y + child_size.y > monitor_rect.bottom) {
-        auto const diff{(origin_dc.y + child_size.y) - monitor_rect.bottom};
-        offset = {offset.x, offset.y - diff};
-        origin_dc =
-            calculate_origin(parent_anchor_point, child_anchor_point, offset);
-      }
-    } else if (positioner.constraint_adjustment &
-               static_cast<uint32_t>(flutter::FlutterWindowPositioner::
-                                         ConstraintAdjustment::resize_y)) {
-      if (origin_dc.y < 0) {
-        auto const diff{std::clamp(abs(origin_dc.y), 1.0, child_size.y - 1)};
-        origin_dc.y += diff;
-        child_size.y -= diff;
-      }
-      if (origin_dc.y + child_size.y > monitor_rect.bottom) {
-        auto const diff{
-            std::clamp((origin_dc.y + child_size.y) - monitor_rect.bottom, 1.0,
-                       child_size.y - 1)};
-        child_size.y -= diff;
-      }
-    }
-  }
-
-  flutter::Win32Window::Point const origin_lc{
-      static_cast<unsigned int>(origin_dc.x / dpr),
-      static_cast<unsigned int>(origin_dc.y / dpr)};
-  flutter::Win32Window::Size const new_size{
-      static_cast<unsigned int>(child_size.x / dpr),
-      static_cast<unsigned int>(child_size.y / dpr)};
-  return {origin_lc, new_size};
 }
 
 void handleCreateRegularWindow(
@@ -450,22 +91,9 @@ void handleCreateDialogWindow(
       flutter::Win32Window::Size const size{static_cast<unsigned int>(width),
                                             static_cast<unsigned int>(height)};
 
-      auto const origin{
-          [&size, &parent]() -> std::optional<flutter::Win32Window::Point> {
-            if (parent) {
-              auto const& windows{
-                  flutter::FlutterWindowController::instance().windows()};
-              if (windows.find(*parent) != windows.end()) {
-                return calculateCenteredOrigin(
-                    size, windows.at(*parent)->GetHandle());
-              }
-            }
-            return std::nullopt;
-          }()};
-
       if (auto const data{
               flutter::FlutterWindowController::instance().createDialogWindow(
-                  L"dialog", size, origin,
+                  L"dialog", size,
                   *parent >= 0 ? std::optional<flutter::FlutterViewId>{*parent}
                                : std::nullopt)}) {
         result->Success(encodeWindowCreationResult(data.value()));
@@ -633,12 +261,9 @@ void handleCreateSatelliteWindow(
           .constraint_adjustment =
               static_cast<uint32_t>(*positioner_constraint_adjustment)};
 
-      auto const& [origin,
-                   new_size]{applyPositioner(positioner, size, *parent)};
-
       if (auto const data{flutter::FlutterWindowController::instance()
-                              .createSatelliteWindow(L"satellite", origin,
-                                                     new_size, *parent)}) {
+                              .createSatelliteWindow(L"satellite", size,
+                                                     positioner, *parent)}) {
         result->Success(encodeWindowCreationResult(data.value()));
       } else {
         result->Error("UNAVAILABLE", "Can't create window.");
@@ -805,12 +430,9 @@ void handleCreatePopupWindow(flutter::MethodCall<> const& call,
           .constraint_adjustment =
               static_cast<uint32_t>(*positioner_constraint_adjustment)};
 
-      auto const& [origin,
-                   new_size]{applyPositioner(positioner, size, *parent)};
-
       if (auto const data{
               flutter::FlutterWindowController::instance().createPopupWindow(
-                  L"popup", origin, new_size, *parent)}) {
+                  L"popup", size, positioner, *parent)}) {
         result->Success(encodeWindowCreationResult(data.value()));
       } else {
         result->Error("UNAVAILABLE", "Can't create window.");
@@ -921,7 +543,6 @@ auto FlutterWindowController::createRegularWindow(std::wstring const& title,
 auto FlutterWindowController::createDialogWindow(
     std::wstring const& title,
     Win32Window::Size const& size,
-    std::optional<Win32Window::Point> origin,
     std::optional<FlutterViewId> parent_view_id)
     -> std::optional<FlutterWindowCreationResult> {
   std::unique_lock lock(mutex_);
@@ -937,8 +558,8 @@ auto FlutterWindowController::createDialogWindow(
   auto window{std::make_unique<FlutterWin32Window>(engine_)};
 
   lock.unlock();
-  if (!window->Create(title, size, FlutterWindowArchetype::dialog, origin,
-                      parent_hwnd)) {
+  if (!window->Create(title, size, FlutterWindowArchetype::dialog, parent_hwnd,
+                      std::nullopt)) {
     return std::nullopt;
   }
   lock.lock();
@@ -964,8 +585,8 @@ auto FlutterWindowController::createDialogWindow(
 
 auto FlutterWindowController::createSatelliteWindow(
     std::wstring const& title,
-    Win32Window::Point const& origin,
     Win32Window::Size const& size,
+    FlutterWindowPositioner const& positioner,
     FlutterViewId parent_view_id)
     -> std::optional<FlutterWindowCreationResult> {
   std::unique_lock lock(mutex_);
@@ -984,8 +605,8 @@ auto FlutterWindowController::createSatelliteWindow(
   auto window{std::make_unique<FlutterWin32Window>(engine_)};
 
   lock.unlock();
-  if (!window->Create(title, size, FlutterWindowArchetype::satellite, origin,
-                      parent_hwnd)) {
+  if (!window->Create(title, size, FlutterWindowArchetype::satellite,
+                      parent_hwnd, positioner)) {
     return std::nullopt;
   }
   lock.lock();
@@ -1012,8 +633,8 @@ auto FlutterWindowController::createSatelliteWindow(
 
 auto FlutterWindowController::createPopupWindow(
     std::wstring const& title,
-    Win32Window::Point const& origin,
     Win32Window::Size const& size,
+    FlutterWindowPositioner const& positioner,
     FlutterViewId parent_view_id)
     -> std::optional<FlutterWindowCreationResult> {
   std::unique_lock lock(mutex_);
@@ -1032,8 +653,8 @@ auto FlutterWindowController::createPopupWindow(
   auto window{std::make_unique<FlutterWin32Window>(engine_)};
 
   lock.unlock();
-  if (!window->Create(title, size, FlutterWindowArchetype::popup, origin,
-                      parent_hwnd)) {
+  if (!window->Create(title, size, FlutterWindowArchetype::popup, parent_hwnd,
+                      positioner)) {
     return std::nullopt;
   }
   lock.lock();
@@ -1159,7 +780,8 @@ FlutterWindowSize FlutterWindowController::getWindowSize(
   }
 
   // Convert to logical coordinates
-  auto const dpr{FlutterDesktopGetDpiForHWND(hwnd) / kBaseDpi};
+  auto const dpr{FlutterDesktopGetDpiForHWND(hwnd) /
+                 static_cast<double>(USER_DEFAULT_SCREEN_DPI)};
   frame.left = static_cast<LONG>(frame.left / dpr);
   frame.top = static_cast<LONG>(frame.top / dpr);
   frame.right = static_cast<LONG>(frame.right / dpr);

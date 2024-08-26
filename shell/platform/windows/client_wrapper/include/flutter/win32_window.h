@@ -105,10 +105,10 @@ class Win32Window {
   // as appropriate for the default monitor. The window is invisible until
   // |Show| is called. Returns true if the window was created successfully.
   bool Create(std::wstring const& title,
-              Size const& size,
+              Size const& client_size,
               FlutterWindowArchetype archetype,
-              std::optional<Point> origin,
-              std::optional<HWND> parent);
+              std::optional<HWND> parent,
+              std::optional<FlutterWindowPositioner> positioner);
 
   // Release OS resources associated with window.
   void Destroy();
@@ -171,7 +171,8 @@ class Win32Window {
   // window handle for hosted content.
   HWND child_content_ = nullptr;
 
-  // Offset between the position of this window and the position of its parent.
+  // Offset between the position of this window and the position of its
+  // parent.
   POINT offset_from_parent_{0, 0};
 
   void CloseChildPopups();
