@@ -46,6 +46,10 @@ auto getLastErrorAsString() -> std::string {
   return oss.str();
 }
 
+// Applies the `positioner` to determine the new origin and size of a window.
+// The `window_size` represents the original size including drop-shadow borders,
+// `frame_size` represents the original size excluding drop-shadow borders, and
+// `parent_hwnd` is the handle to the parent window.
 std::tuple<flutter::Win32Window::Point, flutter::Win32Window::Size>
 applyPositioner(flutter::FlutterWindowPositioner const& positioner,
                 flutter::Win32Window::Size const& window_size,
@@ -57,7 +61,7 @@ applyPositioner(flutter::FlutterWindowPositioner const& positioner,
     auto* monitor{MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)};
     MONITORINFO mi;
     mi.cbSize = sizeof(MONITORINFO);
-    return GetMonitorInfo(monitor, &mi) ? mi.rcMonitor : RECT{0, 0, 0, 0};
+    return GetMonitorInfo(monitor, &mi) ? mi.rcWork : RECT{0, 0, 0, 0};
   }(parent_hwnd)};
 
   struct RectF {
@@ -186,7 +190,7 @@ applyPositioner(flutter::FlutterWindowPositioner const& positioner,
 
   auto parent_anchor_point{get_parent_anchor_point(anchor)};
   auto child_anchor_point{get_child_anchor_point(gravity)};
-  PointF origin_dc{
+  auto origin{
       calculate_origin(parent_anchor_point, child_anchor_point, offset)};
 
   // Constraint adjustments
@@ -195,10 +199,12 @@ applyPositioner(flutter::FlutterWindowPositioner const& positioner,
                                  static_cast<double>(window_size.height)};
 
   auto const is_constrained_along_x{[&]() {
-    return origin_dc.x < 0 || origin_dc.x + child_size.x > monitor_rect.right;
+    return origin.x < monitor_rect.left ||
+           origin.x + child_size.x > monitor_rect.right;
   }};
   auto const is_constrained_along_y{[&]() {
-    return origin_dc.y < 0 || origin_dc.y + child_size.y > monitor_rect.bottom;
+    return origin.y < monitor_rect.top ||
+           origin.y + child_size.y > monitor_rect.bottom;
   }};
 
   // X axis
@@ -251,38 +257,39 @@ applyPositioner(flutter::FlutterWindowPositioner const& positioner,
       parent_anchor_point = get_parent_anchor_point(anchor);
       child_anchor_point = get_child_anchor_point(gravity);
       auto const saved_origin_dc{std::exchange(
-          origin_dc,
+          origin,
           calculate_origin(parent_anchor_point, child_anchor_point, offset))};
       if (is_constrained_along_x()) {
-        origin_dc = saved_origin_dc;
+        origin = saved_origin_dc;
       }
     } else if (positioner.constraint_adjustment &
                static_cast<uint32_t>(flutter::FlutterWindowPositioner::
                                          ConstraintAdjustment::slide_x)) {
       // TODO: Slide towards the direction of the gravity first
-      if (origin_dc.x < 0) {
-        auto const diff{abs(origin_dc.x)};
+      if (origin.x < monitor_rect.left) {
+        auto const diff{monitor_rect.left - origin.x};
         offset = {offset.x + diff, offset.y};
-        origin_dc =
+        origin =
             calculate_origin(parent_anchor_point, child_anchor_point, offset);
       }
-      if (origin_dc.x + child_size.x > monitor_rect.right) {
-        auto const diff{(origin_dc.x + child_size.x) - monitor_rect.right};
+      if (origin.x + child_size.x > monitor_rect.right) {
+        auto const diff{(origin.x + child_size.x) - monitor_rect.right};
         offset = {offset.x - diff, offset.y};
-        origin_dc =
+        origin =
             calculate_origin(parent_anchor_point, child_anchor_point, offset);
       }
     } else if (positioner.constraint_adjustment &
                static_cast<uint32_t>(flutter::FlutterWindowPositioner::
                                          ConstraintAdjustment::resize_x)) {
-      if (origin_dc.x < 0) {
-        auto const diff{std::clamp(abs(origin_dc.x), 1.0, child_size.x - 1)};
-        origin_dc.x += diff;
+      if (origin.x < monitor_rect.left) {
+        auto const diff{
+            std::clamp(monitor_rect.left - origin.x, 1.0, child_size.x - 1)};
+        origin.x += diff;
         window_size_constrained.x -= diff;
       }
-      if (origin_dc.x + child_size.x > monitor_rect.right) {
+      if (origin.x + child_size.x > monitor_rect.right) {
         auto const diff{
-            std::clamp((origin_dc.x + child_size.x) - monitor_rect.right, 1.0,
+            std::clamp((origin.x + child_size.x) - monitor_rect.right, 1.0,
                        child_size.x - 1)};
         window_size_constrained.x -= diff;
       }
@@ -339,51 +346,51 @@ applyPositioner(flutter::FlutterWindowPositioner const& positioner,
       parent_anchor_point = get_parent_anchor_point(anchor);
       child_anchor_point = get_child_anchor_point(gravity);
       auto const saved_origin_dc{std::exchange(
-          origin_dc,
+          origin,
           calculate_origin(parent_anchor_point, child_anchor_point, offset))};
       if (is_constrained_along_y()) {
-        origin_dc = saved_origin_dc;
+        origin = saved_origin_dc;
       }
     } else if (positioner.constraint_adjustment &
                static_cast<uint32_t>(flutter::FlutterWindowPositioner::
                                          ConstraintAdjustment::slide_y)) {
       // TODO: Slide towards the direction of the gravity first
-      if (origin_dc.y < 0) {
-        auto const diff{abs(origin_dc.y)};
+      if (origin.y < monitor_rect.top) {
+        auto const diff{monitor_rect.top - origin.y};
         offset = {offset.x, offset.y + diff};
-        origin_dc =
+        origin =
             calculate_origin(parent_anchor_point, child_anchor_point, offset);
       }
-      if (origin_dc.y + child_size.y > monitor_rect.bottom) {
-        auto const diff{(origin_dc.y + child_size.y) - monitor_rect.bottom};
+      if (origin.y + child_size.y > monitor_rect.bottom) {
+        auto const diff{(origin.y + child_size.y) - monitor_rect.bottom};
         offset = {offset.x, offset.y - diff};
-        origin_dc =
+        origin =
             calculate_origin(parent_anchor_point, child_anchor_point, offset);
       }
     } else if (positioner.constraint_adjustment &
                static_cast<uint32_t>(flutter::FlutterWindowPositioner::
                                          ConstraintAdjustment::resize_y)) {
-      if (origin_dc.y < 0) {
-        auto const diff{std::clamp(abs(origin_dc.y), 1.0, child_size.y - 1)};
-        origin_dc.y += diff;
+      if (origin.y < monitor_rect.top) {
+        auto const diff{
+            std::clamp(monitor_rect.top - origin.y, 1.0, child_size.y - 1)};
+        origin.y += diff;
         window_size_constrained.y -= diff;
       }
-      if (origin_dc.y + child_size.y > monitor_rect.bottom) {
+      if (origin.y + child_size.y > monitor_rect.bottom) {
         auto const diff{
-            std::clamp((origin_dc.y + child_size.y) - monitor_rect.bottom, 1.0,
+            std::clamp((origin.y + child_size.y) - monitor_rect.bottom, 1.0,
                        child_size.y - 1)};
         window_size_constrained.y -= diff;
       }
     }
   }
 
-  flutter::Win32Window::Point const origin_lc{
-      static_cast<unsigned int>(origin_dc.x),
-      static_cast<unsigned int>(origin_dc.y)};
+  flutter::Win32Window::Point const new_origin{
+      static_cast<unsigned int>(origin.x), static_cast<unsigned int>(origin.y)};
   flutter::Win32Window::Size const new_size{
       static_cast<unsigned int>(window_size_constrained.x),
       static_cast<unsigned int>(window_size_constrained.y)};
-  return {origin_lc, new_size};
+  return {new_origin, new_size};
 }
 
 // Estimate the window frame, in physical coordinates, for a window
