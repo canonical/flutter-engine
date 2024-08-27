@@ -851,9 +851,18 @@ Win32Window::MessageHandler(HWND hwnd,
       return 0;
     }
     case WM_SIZE: {
-      RECT const rect = GetClientArea();
+      if (wparam == SIZE_MAXIMIZED) {
+        for (auto* const satellite : child_satellites_) {
+          ShowWindow(satellite->GetHandle(), SW_HIDE);
+        }
+      } else if (wparam == SIZE_RESTORED) {
+        for (auto* const satellite : child_satellites_) {
+          ShowWindow(satellite->GetHandle(), SW_SHOW);
+        }
+      }
       if (child_content_ != nullptr) {
         // Size and position the child window.
+        auto const rect{GetClientArea()};
         MoveWindow(child_content_, rect.left, rect.top, rect.right - rect.left,
                    rect.bottom - rect.top, TRUE);
       }
@@ -906,7 +915,7 @@ Win32Window::MessageHandler(HWND hwnd,
       // Move satellites attached to this window
       RECT rect;
       GetWindowRect(hwnd, &rect);
-      for (auto* satellite : child_satellites_) {
+      for (auto* const satellite : child_satellites_) {
         RECT rect_satellite;
         GetWindowRect(satellite->GetHandle(), &rect_satellite);
         MoveWindow(satellite->GetHandle(),
