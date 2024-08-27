@@ -700,7 +700,7 @@ bool Win32Window::Create(std::wstring const& title,
       }
       break;
     case FlutterWindowArchetype::satellite:
-      window_style |= WS_OVERLAPPEDWINDOW;
+      window_style |= WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX;
       extended_window_style |= WS_EX_TOOLWINDOW;
       if (auto* const parent_window{
               GetThisFromHandle(parent.value_or(nullptr))}) {
