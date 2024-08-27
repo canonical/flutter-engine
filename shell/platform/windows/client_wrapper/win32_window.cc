@@ -418,6 +418,8 @@ auto estimateWindowFrame(flutter::Win32Window::Size window_size,
     DestroyWindow(window);
   }
 
+  UnregisterClass(window_class.lpszClassName, nullptr);
+
   return frame_rect;
 }
 
@@ -653,7 +655,9 @@ Win32Window::Win32Window() {
 
 Win32Window::~Win32Window() {
   --g_active_window_count;
-  Destroy();
+  if (g_active_window_count == 0) {
+    WindowClassRegistrar::GetInstance()->UnregisterWindowClass();
+  }
 }
 
 bool Win32Window::Create(std::wstring const& title,
@@ -765,12 +769,12 @@ bool Win32Window::Create(std::wstring const& title,
   auto const* window_class{
       WindowClassRegistrar::GetInstance()->GetWindowClass()};
 
-  auto const window{CreateWindowEx(
-      extended_window_style, window_class, title.c_str(), window_style, x, y,
-      window_size.width, window_size.height, parent.value_or(nullptr), nullptr,
-      GetModuleHandle(nullptr), this)};
+  CreateWindowEx(extended_window_style, window_class, title.c_str(),
+                 window_style, x, y, window_size.width, window_size.height,
+                 parent.value_or(nullptr), nullptr, GetModuleHandle(nullptr),
+                 this);
 
-  if (!window) {
+  if (!window_handle_) {
     auto const error_message{getLastErrorAsString()};
     std::cerr << "Cannot create window due to a CreateWindowEx error: "
               << error_message.c_str() << '\n';
@@ -780,23 +784,24 @@ bool Win32Window::Create(std::wstring const& title,
   // Adjust the window position so that its origin is the top-left corner of the
   // window frame
   RECT frame_rect;
-  DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &frame_rect,
-                        sizeof(frame_rect));
+  DwmGetWindowAttribute(window_handle_, DWMWA_EXTENDED_FRAME_BOUNDS,
+                        &frame_rect, sizeof(frame_rect));
   RECT window_rect;
-  GetWindowRect(window, &window_rect);
+  GetWindowRect(window_handle_, &window_rect);
   auto const left_dropshadow_width{frame_rect.left - window_rect.left};
   auto const top_dropshadow_height{window_rect.top - frame_rect.top};
-  SetWindowPos(window, nullptr, window_rect.left - left_dropshadow_width,
+  SetWindowPos(window_handle_, nullptr,
+               window_rect.left - left_dropshadow_width,
                window_rect.top - top_dropshadow_height, 0, 0,
                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
   if (parent) {
-    offset_from_parent_ = CalculateWindowOffset(window, parent.value());
+    offset_from_parent_ = CalculateWindowOffset(window_handle_, parent.value());
   }
 
-  UpdateTheme(window);
+  UpdateTheme(window_handle_);
 
-  ShowWindow(window, SW_SHOW);
+  ShowWindow(window_handle_, SW_SHOW);
 
   return OnCreate();
 }
@@ -829,7 +834,6 @@ Win32Window::MessageHandler(HWND hwnd,
                             LPARAM lparam) {
   switch (message) {
     case WM_DESTROY:
-      window_handle_ = nullptr;
       Destroy();
       if (quit_on_close_) {
         PostQuitMessage(0);
@@ -935,21 +939,13 @@ void Win32Window::CloseChildPopups() {
     auto popups{child_popups_};
     child_popups_.clear();
     for (auto* popup : popups) {
-      popup->Destroy();
+      DestroyWindow(popup->GetHandle());
     }
   }
 }
 
 void Win32Window::Destroy() {
   OnDestroy();
-
-  if (window_handle_) {
-    DestroyWindow(window_handle_);
-    window_handle_ = nullptr;
-  }
-  if (g_active_window_count == 0) {
-    WindowClassRegistrar::GetInstance()->UnregisterWindowClass();
-  }
 }
 
 Win32Window* Win32Window::GetThisFromHandle(HWND window) noexcept {
@@ -1005,13 +1001,14 @@ void Win32Window::OnDestroy() {
         for (auto* const satellite : owner_window->child_satellites_) {
           EnableWindow(satellite->GetHandle(), TRUE);
         }
-
         SetForegroundWindow(owner_window_handle);
       }
       break;
     case FlutterWindowArchetype::satellite:
-      if (auto* const parent_window{GetParent(window_handle_)}) {
-        GetThisFromHandle(parent_window)->child_satellites_.erase(this);
+      if (auto* const owner_window_handle{
+              GetWindow(window_handle_, GW_OWNER)}) {
+        auto* const owner_window{GetThisFromHandle(owner_window_handle)};
+        owner_window->child_satellites_.erase(this);
       }
       break;
     case FlutterWindowArchetype::popup:

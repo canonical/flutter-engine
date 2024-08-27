@@ -158,29 +158,33 @@ void handleCreateRegularWindow(
     std::unique_ptr<flutter::MethodResult<>>& result) {
   auto const* const arguments{call.arguments()};
   if (auto const* const map{std::get_if<flutter::EncodableMap>(arguments)}) {
-    auto const width_it{map->find(flutter::EncodableValue("width"))};
-    auto const height_it{map->find(flutter::EncodableValue("height"))};
-    if (width_it != map->end() && height_it != map->end()) {
-      auto const* const width{std::get_if<int>(&width_it->second)};
-      auto const* const height{std::get_if<int>(&height_it->second)};
-      if (width && height) {
-        flutter::Win32Window::Size const size{
-            static_cast<unsigned int>(*width),
-            static_cast<unsigned int>(*height)};
+    auto const size_it{map->find(flutter::EncodableValue("size"))};
 
-        if (auto const data{flutter::FlutterWindowController::instance()
-                                .createRegularWindow(L"regular", size)}) {
-          result->Success(encodeWindowCreationResult(data.value()));
-        } else {
-          result->Error("UNAVAILABLE", "Can't create window.");
-        }
-      } else {
+    if (size_it != map->end()) {
+      auto const* const size_list{
+          std::get_if<std::vector<flutter::EncodableValue>>(&size_it->second)};
+      if (size_list->size() != 2 ||
+          !std::holds_alternative<int>(size_list->at(0)) ||
+          !std::holds_alternative<int>(size_list->at(1))) {
         result->Error("INVALID_VALUE",
-                      "Values for {'width', 'height'} must be of type int.");
+                      "Values for 'size' must be of type int.");
+        return;
+      }
+      auto const width{std::get<int>(size_list->at(0))};
+      auto const height{std::get<int>(size_list->at(1))};
+      flutter::Win32Window::Size const size{static_cast<unsigned int>(width),
+                                            static_cast<unsigned int>(height)};
+
+      if (auto const data{
+              flutter::FlutterWindowController::instance().createRegularWindow(
+                  L"regular", size)}) {
+        result->Success(encodeWindowCreationResult(data.value()));
+      } else {
+        result->Error("UNAVAILABLE", "Can't create window.");
       }
     } else {
       result->Error("INVALID_VALUE",
-                    "Map does not contain required keys: {'width', 'height'}.");
+                    "Map does not contain required key: 'size'.");
     }
   } else {
     result->Error("INVALID_VALUE", "Value argument is not a map.");
@@ -566,7 +570,7 @@ auto FlutterWindowController::destroyWindow(FlutterViewId view_id,
       for (auto& [id, window] : windows_) {
         if (id != view_id && window->flutter_controller()) {
           lock.unlock();
-          window->Destroy();
+          DestroyWindow(window->GetHandle());
           lock.lock();
         }
       }
@@ -574,10 +578,11 @@ auto FlutterWindowController::destroyWindow(FlutterViewId view_id,
     if (destroy_native_window) {
       auto const& window{windows_[view_id]};
       lock.unlock();
-      window->Destroy();
+      DestroyWindow(window->GetHandle());
       lock.lock();
+    } else {
+      sendOnWindowDestroyed(view_id);
     }
-    sendOnWindowDestroyed(view_id);
     return true;
   }
   return false;
