@@ -879,8 +879,11 @@ Win32Window::MessageHandler(HWND hwnd,
             window->CloseChildPopups();
           }
         }
-        // Close child popups if this window is being activated
         CloseChildPopups();
+        ShowWindowAndAncestorsSatellites();
+        if (archetype_ != FlutterWindowArchetype::satellite) {
+          HideOtherWindowsSatellites();
+        }
       }
 
       if (child_content_ != nullptr) {
@@ -950,6 +953,43 @@ void Win32Window::CloseChildPopups() {
     for (auto* popup : popups) {
       DestroyWindow(popup->GetHandle());
     }
+  }
+}
+
+void Win32Window::HideOtherWindowsSatellites() {
+  auto const is_parent_or_owner{[this](HWND potential_parent_or_owner) {
+    auto current{window_handle_};
+    while (current) {
+      auto const parent{GetParent(current)};
+      auto const owner{GetWindow(current, GW_OWNER)};
+      current = parent ? parent : owner;
+      if (current == potential_parent_or_owner) {
+        return true;
+      }
+    }
+    return false;
+  }};
+
+  for (auto const& [_, window] :
+       FlutterWindowController::instance().windows()) {
+    if (window->window_handle_ != window_handle_ &&
+        !is_parent_or_owner(window->window_handle_)) {
+      for (auto* const child : window->child_satellites_) {
+        ShowWindow(child->window_handle_, SW_HIDE);
+      }
+    }
+  }
+}
+
+void Win32Window::ShowWindowAndAncestorsSatellites() {
+  auto window{window_handle_};
+  while (window) {
+    for (auto* const child : GetThisFromHandle(window)->child_satellites_) {
+      ShowWindow(child->window_handle_, SW_SHOWNOACTIVATE);
+    }
+    auto const parent{GetParent(window)};
+    auto const owner{GetWindow(window, GW_OWNER)};
+    window = parent ? parent : owner;
   }
 }
 

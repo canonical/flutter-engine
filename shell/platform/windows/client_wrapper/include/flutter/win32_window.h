@@ -176,6 +176,8 @@ class Win32Window {
   POINT offset_from_parent_{0, 0};
 
   void CloseChildPopups();
+  void HideOtherWindowsSatellites();
+  void ShowWindowAndAncestorsSatellites();
 };
 
 }  // namespace flutter
