@@ -144,8 +144,8 @@ class Win32Window {
   virtual void OnDestroy();
 
   FlutterWindowArchetype archetype_{FlutterWindowArchetype::regular};
-  std::set<Win32Window*> child_popups_;
-  std::set<Win32Window*> child_satellites_;
+  std::set<Win32Window*> children_;
+  int num_child_popups_{0};
 
  private:
   friend class WindowClassRegistrar;
@@ -182,6 +182,9 @@ class Win32Window {
   void CloseChildPopups();
   void HideWindowsSatellites(bool include_child_satellites);
   void ShowWindowAndAncestorsSatellites();
+  void EnableWindowAndDescendants(bool enable);
+  auto FindDeepestDialog() -> Win32Window*;
+  void UpdateModalState();
 };
 
 }  // namespace flutter

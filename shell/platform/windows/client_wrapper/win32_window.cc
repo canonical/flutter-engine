@@ -588,6 +588,20 @@ void UpdateTheme(HWND window) {
   }
 }
 
+auto GetParentOrOwner(HWND window) {
+  auto const parent{GetParent(window)};
+  auto const owner{GetWindow(window, GW_OWNER)};
+  return parent ? parent : owner;
+}
+
+auto GetRootAncestor(HWND window) -> HWND {
+  auto* root_ancestor{window};
+  while (GetParentOrOwner(root_ancestor)) {
+    root_ancestor = GetParentOrOwner(root_ancestor);
+  }
+  return root_ancestor;
+}
+
 }  // namespace
 
 namespace flutter {
@@ -685,18 +699,12 @@ bool Win32Window::Create(std::wstring const& title,
         // (which includes a close button)
         window_style |= WS_MINIMIZEBOX | WS_SYSMENU;
       } else {
-        // If the dialog has a parent, make it modal by disabling the parent
-        // window and the parent's satellites
-        EnableWindow(parent.value(), FALSE);
-        auto* const parent_window{GetThisFromHandle(parent.value())};
-        for (auto* const satellite : parent_window->child_satellites_) {
-          EnableWindow(satellite->GetHandle(), FALSE);
-        }
         // If the parent window has the WS_EX_TOOLWINDOW style, apply the same
         // style to the dialog
         if (GetWindowLongPtr(parent.value(), GWL_EXSTYLE) & WS_EX_TOOLWINDOW) {
           extended_window_style |= WS_EX_TOOLWINDOW;
         }
+        GetThisFromHandle(parent.value())->children_.insert(this);
       }
       break;
     case FlutterWindowArchetype::satellite:
@@ -707,7 +715,7 @@ bool Win32Window::Create(std::wstring const& title,
         if (parent_window->child_content_ != nullptr) {
           SetFocus(parent_window->child_content_);
         }
-        parent_window->child_satellites_.insert(this);
+        parent_window->children_.insert(this);
       }
       break;
     case FlutterWindowArchetype::popup:
@@ -717,7 +725,8 @@ bool Win32Window::Create(std::wstring const& title,
         if (parent_window->child_content_ != nullptr) {
           SetFocus(parent_window->child_content_);
         }
-        parent_window->child_popups_.insert(this);
+        parent_window->children_.insert(this);
+        ++parent_window->num_child_popups_;
       }
       break;
     case FlutterWindowArchetype::tip:
@@ -801,6 +810,10 @@ bool Win32Window::Create(std::wstring const& title,
 
   UpdateTheme(window_handle_);
 
+  if (archetype == FlutterWindowArchetype::dialog) {
+    UpdateModalState();
+  }
+
   ShowWindow(window_handle_, SW_SHOW);
 
   return OnCreate();
@@ -852,12 +865,16 @@ Win32Window::MessageHandler(HWND hwnd,
     }
     case WM_SIZE: {
       if (wparam == SIZE_MAXIMIZED) {
-        for (auto* const satellite : child_satellites_) {
-          ShowWindow(satellite->GetHandle(), SW_HIDE);
+        for (auto* const child : children_) {
+          if (child->archetype_ == FlutterWindowArchetype::satellite) {
+            ShowWindow(child->GetHandle(), SW_HIDE);
+          }
         }
       } else if (wparam == SIZE_RESTORED) {
-        for (auto* const satellite : child_satellites_) {
-          ShowWindow(satellite->GetHandle(), SW_SHOW);
+        for (auto* const child : children_) {
+          if (child->archetype_ == FlutterWindowArchetype::satellite) {
+            ShowWindow(child->GetHandle(), SW_SHOWNOACTIVATE);
+          }
         }
       }
       if (child_content_ != nullptr) {
@@ -893,7 +910,7 @@ Win32Window::MessageHandler(HWND hwnd,
 
     case WM_NCACTIVATE:
       if (wparam == FALSE && archetype_ != FlutterWindowArchetype::popup) {
-        if (suppress_nc_inactive_redraw || !child_popups_.empty()) {
+        if (suppress_nc_inactive_redraw || num_child_popups_ > 0) {
           // If an inactive title bar is to be drawn, and this is a top-level
           // window with popups, force the title bar to be drawn in its active
           // colors
@@ -920,14 +937,16 @@ Win32Window::MessageHandler(HWND hwnd,
       // Move satellites attached to this window
       RECT rect;
       GetWindowRect(hwnd, &rect);
-      for (auto* const satellite : child_satellites_) {
-        RECT rect_satellite;
-        GetWindowRect(satellite->GetHandle(), &rect_satellite);
-        MoveWindow(satellite->GetHandle(),
-                   rect.left + satellite->offset_from_parent_.x,
-                   rect.top + satellite->offset_from_parent_.y,
-                   rect_satellite.right - rect_satellite.left,
-                   rect_satellite.bottom - rect_satellite.top, FALSE);
+      for (auto* const child : children_) {
+        if (child->archetype_ == FlutterWindowArchetype::satellite) {
+          RECT rect_satellite;
+          GetWindowRect(child->GetHandle(), &rect_satellite);
+          MoveWindow(child->GetHandle(),
+                     rect.left + child->offset_from_parent_.x,
+                     rect.top + child->offset_from_parent_.y,
+                     rect_satellite.right - rect_satellite.left,
+                     rect_satellite.bottom - rect_satellite.top, FALSE);
+        }
       }
     } break;
 
@@ -949,9 +968,22 @@ Win32Window::MessageHandler(HWND hwnd,
 }
 
 void Win32Window::CloseChildPopups() {
-  if (!child_popups_.empty()) {
-    auto popups{child_popups_};
-    child_popups_.clear();
+  if (num_child_popups_ > 0) {
+    std::set<Win32Window*> popups;
+    for (auto* const child : children_) {
+      if (child->archetype_ == FlutterWindowArchetype::popup) {
+        popups.insert(child);
+      }
+    }
+
+    for (auto it{children_.begin()}; it != children_.end();) {
+      if ((*it)->archetype_ == FlutterWindowArchetype::popup) {
+        it = children_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+
     for (auto* popup : popups) {
       auto const parent_handle{GetParent(popup->window_handle_)};
       auto const parent{GetThisFromHandle(parent_handle)};
@@ -967,7 +999,7 @@ void Win32Window::CloseChildPopups() {
 
       // Repaint parent window to make sure its title bar is painted with the
       // color based on its actual activation state
-      if (parent->child_popups_.empty()) {
+      if (parent->num_child_popups_ == 0) {
         SetWindowPos(parent_handle, nullptr, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
       }
@@ -976,13 +1008,11 @@ void Win32Window::CloseChildPopups() {
 }
 
 void Win32Window::HideWindowsSatellites(bool include_child_satellites) {
-  auto const is_parent_or_owner{[this](HWND potential_parent_or_owner) {
+  auto const is_ancestor{[this](HWND window) {
     auto current{window_handle_};
     while (current) {
-      auto const parent{GetParent(current)};
-      auto const owner{GetWindow(current, GW_OWNER)};
-      current = parent ? parent : owner;
-      if (current == potential_parent_or_owner) {
+      current = GetParentOrOwner(current);
+      if (current == window) {
         return true;
       }
     }
@@ -993,9 +1023,24 @@ void Win32Window::HideWindowsSatellites(bool include_child_satellites) {
        FlutterWindowController::instance().windows()) {
     if ((include_child_satellites ||
          window->window_handle_ != window_handle_) &&
-        !is_parent_or_owner(window->window_handle_)) {
-      for (auto* const child : window->child_satellites_) {
-        ShowWindow(child->window_handle_, SW_HIDE);
+        !is_ancestor(window->window_handle_)) {
+      for (auto* const child : window->children_) {
+        if (child->archetype_ == FlutterWindowArchetype::satellite) {
+          auto const has_dialog_child{[](Win32Window* window) {
+            for (auto* const child : window->children_) {
+              if (child->archetype_ == FlutterWindowArchetype::dialog) {
+                return true;
+              }
+            }
+            return false;
+          }(child)};
+          // Ensure that the satellite is not hidden if it has a dialog as a
+          // child, as hiding the satellite would obscure the content the dialog
+          // is modal to.
+          if (!has_dialog_child) {
+            ShowWindow(child->window_handle_, SW_HIDE);
+          }
+        }
       }
     }
   }
@@ -1004,12 +1049,42 @@ void Win32Window::HideWindowsSatellites(bool include_child_satellites) {
 void Win32Window::ShowWindowAndAncestorsSatellites() {
   auto window{window_handle_};
   while (window) {
-    for (auto* const child : GetThisFromHandle(window)->child_satellites_) {
-      ShowWindow(child->window_handle_, SW_SHOWNOACTIVATE);
+    for (auto* const child : GetThisFromHandle(window)->children_) {
+      if (child->archetype_ == FlutterWindowArchetype::satellite) {
+        ShowWindow(child->window_handle_, SW_SHOWNOACTIVATE);
+      }
     }
-    auto const parent{GetParent(window)};
-    auto const owner{GetWindow(window, GW_OWNER)};
-    window = parent ? parent : owner;
+    window = GetParentOrOwner(window);
+  }
+}
+
+void Win32Window::EnableWindowAndDescendants(bool enable) {
+  EnableWindow(window_handle_, enable);
+  for (auto* const child : children_) {
+    child->EnableWindowAndDescendants(enable);
+  }
+}
+
+auto Win32Window::FindDeepestDialog() -> Win32Window* {
+  Win32Window* deepest_dialog{nullptr};
+  if (archetype_ == FlutterWindowArchetype::dialog) {
+    deepest_dialog = this;
+  }
+  for (auto* const child : children_) {
+    if (auto* const child_deepest_dialog{child->FindDeepestDialog()}) {
+      deepest_dialog = child_deepest_dialog;
+    }
+  }
+  return deepest_dialog;
+}
+
+void Win32Window::UpdateModalState() {
+  auto* const root_ancestor{GetThisFromHandle(GetRootAncestor(window_handle_))};
+  if (auto* const deepest_dialog{root_ancestor->FindDeepestDialog()}) {
+    root_ancestor->EnableWindowAndDescendants(false);
+    deepest_dialog->EnableWindowAndDescendants(true);
+  } else {
+    root_ancestor->EnableWindowAndDescendants(true);
   }
 }
 
@@ -1065,24 +1140,23 @@ void Win32Window::OnDestroy() {
     case FlutterWindowArchetype::dialog:
       if (auto* const owner_window_handle{
               GetWindow(window_handle_, GW_OWNER)}) {
-        EnableWindow(owner_window_handle, TRUE);
-        auto* const owner_window{GetThisFromHandle(owner_window_handle)};
-        for (auto* const satellite : owner_window->child_satellites_) {
-          EnableWindow(satellite->GetHandle(), TRUE);
-        }
+        GetThisFromHandle(owner_window_handle)->children_.erase(this);
         SetForegroundWindow(owner_window_handle);
+        UpdateModalState();
       }
       break;
     case FlutterWindowArchetype::satellite:
       if (auto* const owner_window_handle{
               GetWindow(window_handle_, GW_OWNER)}) {
         auto* const owner_window{GetThisFromHandle(owner_window_handle)};
-        owner_window->child_satellites_.erase(this);
+        owner_window->children_.erase(this);
       }
       break;
     case FlutterWindowArchetype::popup:
-      if (auto* const parent_window{GetParent(window_handle_)}) {
-        GetThisFromHandle(parent_window)->child_popups_.erase(this);
+      if (auto* const parent_window_handle{GetParent(window_handle_)}) {
+        auto* const parent_window{GetThisFromHandle(parent_window_handle)};
+        parent_window->children_.erase(this);
+        --parent_window->num_child_popups_;
       }
       break;
     case FlutterWindowArchetype::tip:
