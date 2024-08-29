@@ -882,7 +882,7 @@ Win32Window::MessageHandler(HWND hwnd,
         CloseChildPopups();
         ShowWindowAndAncestorsSatellites();
         if (archetype_ != FlutterWindowArchetype::satellite) {
-          HideOtherWindowsSatellites();
+          HideWindowsSatellites(false);
         }
       }
 
@@ -892,20 +892,22 @@ Win32Window::MessageHandler(HWND hwnd,
       return 0;
 
     case WM_NCACTIVATE:
-      if (wparam == FALSE && archetype_ != FlutterWindowArchetype::popup &&
-          !child_popups_.empty()) {
-        // If an inactive title bar is to be drawn, and this is a top-level
-        // window with popups, force the title bar to be drawn in its active
-        // colors
-        return TRUE;
+      if (wparam == FALSE && archetype_ != FlutterWindowArchetype::popup) {
+        if (suppress_nc_inactive_redraw || !child_popups_.empty()) {
+          // If an inactive title bar is to be drawn, and this is a top-level
+          // window with popups, force the title bar to be drawn in its active
+          // colors
+          return TRUE;
+        }
       }
       break;
 
     case WM_ACTIVATEAPP:
       if (wparam == FALSE) {
-        // Close child popups if a window belonging to a different application
-        // is being activated
+        // Close child popups and hide satellites from all windows if a window
+        // belonging to a different application is being activated
         CloseChildPopups();
+        HideWindowsSatellites(true);
       }
       return 0;
 
@@ -951,12 +953,29 @@ void Win32Window::CloseChildPopups() {
     auto popups{child_popups_};
     child_popups_.clear();
     for (auto* popup : popups) {
+      auto const parent_handle{GetParent(popup->window_handle_)};
+      auto const parent{GetThisFromHandle(parent_handle)};
+
+      // Popups' parents are drawn with active colors even though they are
+      // actually inactive. When a popup is destroyed, the parent might be
+      // redrawn as inactive (reflecting its true state) before being redrawn as
+      // active. To prevent flickering during this transition, suppress the
+      // inactive redraw.
+      parent->suppress_nc_inactive_redraw = true;
       DestroyWindow(popup->GetHandle());
+      parent->suppress_nc_inactive_redraw = false;
+
+      // Repaint parent window to make sure its title bar is painted with the
+      // color based on its actual activation state
+      if (parent->child_popups_.empty()) {
+        SetWindowPos(parent_handle, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+      }
     }
   }
 }
 
-void Win32Window::HideOtherWindowsSatellites() {
+void Win32Window::HideWindowsSatellites(bool include_child_satellites) {
   auto const is_parent_or_owner{[this](HWND potential_parent_or_owner) {
     auto current{window_handle_};
     while (current) {
@@ -972,7 +991,8 @@ void Win32Window::HideOtherWindowsSatellites() {
 
   for (auto const& [_, window] :
        FlutterWindowController::instance().windows()) {
-    if (window->window_handle_ != window_handle_ &&
+    if ((include_child_satellites ||
+         window->window_handle_ != window_handle_) &&
         !is_parent_or_owner(window->window_handle_)) {
       for (auto* const child : window->child_satellites_) {
         ShowWindow(child->window_handle_, SW_HIDE);

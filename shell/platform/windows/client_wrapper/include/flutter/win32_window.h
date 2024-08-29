@@ -175,8 +175,12 @@ class Win32Window {
   // parent.
   POINT offset_from_parent_{0, 0};
 
+  // Prevents the non-client area from being redrawn as inactive when child
+  // popups are being destroyed.
+  bool suppress_nc_inactive_redraw{false};
+
   void CloseChildPopups();
-  void HideOtherWindowsSatellites();
+  void HideWindowsSatellites(bool include_child_satellites);
   void ShowWindowAndAncestorsSatellites();
 };
 
