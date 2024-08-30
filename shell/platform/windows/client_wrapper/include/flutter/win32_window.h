@@ -149,6 +149,7 @@ class Win32Window {
 
  private:
   friend class WindowClassRegistrar;
+  friend class FlutterWindowController;
 
   // OS callback called by message pump. Handles the WM_NCCREATE message which
   // is passed when the non-client area is being created and enables automatic
@@ -162,6 +163,13 @@ class Win32Window {
 
   // Retrieves a class instance pointer for |window|
   static Win32Window* GetThisFromHandle(HWND window) noexcept;
+
+  // Controls whether satellites can be hidden. By default, when a window and
+  // all its children become inactive, its satellites will be hidden. However,
+  // when a modal dialog is destroyed, satellite hiding needs to be temporarily
+  // disabled by the controller to prevent flickering caused by briefly hiding
+  // and showing the satellites.
+  static void EnableSatelliteHiding(bool enable);
 
   bool quit_on_close_ = false;
 

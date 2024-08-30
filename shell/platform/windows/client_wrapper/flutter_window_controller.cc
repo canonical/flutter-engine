@@ -578,7 +578,13 @@ auto FlutterWindowController::destroyWindow(FlutterViewId view_id,
     if (destroy_native_window) {
       auto const& window{windows_[view_id]};
       lock.unlock();
+      if (window->archetype_ == FlutterWindowArchetype::dialog &&
+          GetWindow(window->GetHandle(), GW_OWNER)) {
+        // Disable satellite hiding when a modal dialog is destroyed
+        Win32Window::EnableSatelliteHiding(false);
+      }
       DestroyWindow(window->GetHandle());
+      Win32Window::EnableSatelliteHiding(true);
       lock.lock();
     } else {
       sendOnWindowDestroyed(view_id);
