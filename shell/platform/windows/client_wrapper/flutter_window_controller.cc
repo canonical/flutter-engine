@@ -176,8 +176,9 @@ void handleCreateRegularWindow(
                                             static_cast<unsigned int>(height)};
 
       if (auto const data{
-              flutter::FlutterWindowController::instance().createRegularWindow(
-                  L"regular", size)}) {
+              flutter::FlutterWindowController::instance().createWindow(
+                  L"regular", size, flutter::FlutterWindowArchetype::regular,
+                  std::nullopt, std::nullopt)}) {
         result->Success(encodeWindowCreationResult(data.value()));
       } else {
         result->Error("UNAVAILABLE", "Can't create window.");
@@ -222,8 +223,9 @@ void handleCreateDialogWindow(
                                             static_cast<unsigned int>(height)};
 
       if (auto const data{
-              flutter::FlutterWindowController::instance().createDialogWindow(
-                  L"dialog", size,
+              flutter::FlutterWindowController::instance().createWindow(
+                  L"dialog", size, flutter::FlutterWindowArchetype::dialog,
+                  std::nullopt,
                   *parent >= 0 ? std::optional<flutter::FlutterViewId>{*parent}
                                : std::nullopt)}) {
         result->Success(encodeWindowCreationResult(data.value()));
@@ -269,10 +271,11 @@ void handleCreateSatelliteWindow(
                                             static_cast<unsigned int>(height)};
 
       if (auto const positioner{buildPositioner(map, result)}) {
-        if (auto const data{flutter::FlutterWindowController::instance()
-                                .createSatelliteWindow(L"satellite", size,
-                                                       positioner.value(),
-                                                       *parent)}) {
+        if (auto const data{
+                flutter::FlutterWindowController::instance().createWindow(
+                    L"satellite", size,
+                    flutter::FlutterWindowArchetype::satellite, positioner,
+                    *parent)}) {
           result->Success(encodeWindowCreationResult(data.value()));
         } else {
           result->Error("UNAVAILABLE", "Can't create window.");
@@ -317,8 +320,9 @@ void handleCreatePopupWindow(flutter::MethodCall<> const& call,
 
       if (auto const positioner{buildPositioner(map, result)}) {
         if (auto const data{
-                flutter::FlutterWindowController::instance().createPopupWindow(
-                    L"popup", size, positioner.value(), *parent)}) {
+                flutter::FlutterWindowController::instance().createWindow(
+                    L"popup", size, flutter::FlutterWindowArchetype::popup,
+                    positioner, *parent)}) {
           result->Success(encodeWindowCreationResult(data.value()));
         } else {
           result->Error("UNAVAILABLE", "Can't create window.");
@@ -384,19 +388,29 @@ void FlutterWindowController::setEngine(std::shared_ptr<FlutterEngine> engine) {
   initializeChannel();
 }
 
-auto FlutterWindowController::createRegularWindow(std::wstring const& title,
-                                                  Win32Window::Size const& size)
+auto FlutterWindowController::createWindow(
+    std::wstring const& title,
+    Win32Window::Size const& size,
+    FlutterWindowArchetype archetype,
+    std::optional<FlutterWindowPositioner> positioner,
+    std::optional<FlutterViewId> parent_view_id)
     -> std::optional<FlutterWindowCreationResult> {
   std::unique_lock lock(mutex_);
   if (!engine_) {
-    std::cerr << "Cannot create regular window without an engine.\n";
+    std::cerr << "Cannot create window without an engine.\n";
     return std::nullopt;
   }
+
   auto window{std::make_unique<FlutterWin32Window>(engine_)};
 
+  std::optional<HWND> const parent_hwnd{
+      parent_view_id.has_value() &&
+              windows_.find(parent_view_id.value()) != windows_.end()
+          ? std::optional<HWND>{windows_[parent_view_id.value()]->GetHandle()}
+          : std::nullopt};
+
   lock.unlock();
-  if (!window->Create(title, size, FlutterWindowArchetype::regular,
-                      std::nullopt, std::nullopt)) {
+  if (!window->Create(title, size, archetype, parent_hwnd, positioner)) {
     return std::nullopt;
   }
   lock.lock();
@@ -410,148 +424,11 @@ auto FlutterWindowController::createRegularWindow(std::wstring const& title,
   windows_[view_id] = std::move(window);
 
   cleanupClosedWindows();
-  sendOnWindowCreated(FlutterWindowArchetype::regular, view_id, std::nullopt);
-
-  FlutterWindowCreationResult result{
-      .view_id = view_id,
-      .archetype = FlutterWindowArchetype::regular,
-      .size = getWindowSize(view_id)};
-
-  lock.unlock();
-
-  sendOnWindowResized(view_id);
-
-  return result;
-}
-
-auto FlutterWindowController::createDialogWindow(
-    std::wstring const& title,
-    Win32Window::Size const& size,
-    std::optional<FlutterViewId> parent_view_id)
-    -> std::optional<FlutterWindowCreationResult> {
-  std::unique_lock lock(mutex_);
-  if (!engine_) {
-    std::cerr << "Cannot create dialog without an engine.\n";
-    return std::nullopt;
-  }
-
-  std::optional<HWND> const parent_hwnd{
-      parent_view_id && windows_.find(*parent_view_id) != windows_.end()
-          ? std::optional<HWND>{windows_[*parent_view_id].get()->GetHandle()}
-          : std::nullopt};
-  auto window{std::make_unique<FlutterWin32Window>(engine_)};
-
-  lock.unlock();
-  if (!window->Create(title, size, FlutterWindowArchetype::dialog, parent_hwnd,
-                      std::nullopt)) {
-    return std::nullopt;
-  }
-  lock.lock();
-
-  auto const view_id{window->flutter_controller()->view_id()};
-  windows_[view_id] = std::move(window);
-
-  cleanupClosedWindows();
-  sendOnWindowCreated(FlutterWindowArchetype::dialog, view_id, parent_view_id);
-
-  FlutterWindowCreationResult result{
-      .view_id = view_id,
-      .parent_id = parent_view_id,
-      .archetype = FlutterWindowArchetype::dialog,
-      .size = getWindowSize(view_id)};
-
-  lock.unlock();
-
-  sendOnWindowResized(view_id);
-
-  return result;
-}
-
-auto FlutterWindowController::createSatelliteWindow(
-    std::wstring const& title,
-    Win32Window::Size const& size,
-    FlutterWindowPositioner const& positioner,
-    FlutterViewId parent_view_id)
-    -> std::optional<FlutterWindowCreationResult> {
-  std::unique_lock lock(mutex_);
-  if (!engine_) {
-    std::cerr << "Cannot create satellite without an engine.\n";
-    return std::nullopt;
-  }
-
-  auto* const parent_hwnd{windows_.find(parent_view_id) != windows_.end()
-                              ? windows_[parent_view_id].get()->GetHandle()
-                              : nullptr};
-  if (!parent_hwnd) {
-    std::cerr << "Invalid parent window (view ID " << parent_view_id << ").\n";
-    return std::nullopt;
-  }
-  auto window{std::make_unique<FlutterWin32Window>(engine_)};
-
-  lock.unlock();
-  if (!window->Create(title, size, FlutterWindowArchetype::satellite,
-                      parent_hwnd, positioner)) {
-    return std::nullopt;
-  }
-  lock.lock();
-
-  auto const view_id{window->flutter_controller()->view_id()};
-  windows_[view_id] = std::move(window);
-
-  cleanupClosedWindows();
-  sendOnWindowCreated(FlutterWindowArchetype::satellite, view_id,
-                      parent_view_id);
-
-  FlutterWindowCreationResult result{
-      .view_id = view_id,
-      .parent_id = parent_view_id,
-      .archetype = FlutterWindowArchetype::satellite,
-      .size = getWindowSize(view_id)};
-
-  lock.unlock();
-
-  sendOnWindowResized(view_id);
-
-  return result;
-}
-
-auto FlutterWindowController::createPopupWindow(
-    std::wstring const& title,
-    Win32Window::Size const& size,
-    FlutterWindowPositioner const& positioner,
-    FlutterViewId parent_view_id)
-    -> std::optional<FlutterWindowCreationResult> {
-  std::unique_lock lock(mutex_);
-  if (!engine_) {
-    std::cerr << "Cannot create popup without an engine.\n";
-    return std::nullopt;
-  }
-
-  auto* const parent_hwnd{windows_.find(parent_view_id) != windows_.end()
-                              ? windows_[parent_view_id].get()->GetHandle()
-                              : nullptr};
-  if (!parent_hwnd) {
-    std::cerr << "Invalid parent window (view ID " << parent_view_id << ").\n";
-    return std::nullopt;
-  }
-  auto window{std::make_unique<FlutterWin32Window>(engine_)};
-
-  lock.unlock();
-  if (!window->Create(title, size, FlutterWindowArchetype::popup, parent_hwnd,
-                      positioner)) {
-    return std::nullopt;
-  }
-  lock.lock();
-
-  auto const view_id{window->flutter_controller()->view_id()};
-  windows_[view_id] = std::move(window);
-
-  cleanupClosedWindows();
-  sendOnWindowCreated(FlutterWindowArchetype::popup, view_id, parent_view_id);
+  sendOnWindowCreated(archetype, view_id, parent_view_id);
 
   FlutterWindowCreationResult result{.view_id = view_id,
                                      .parent_id = parent_view_id,
-                                     .archetype = FlutterWindowArchetype::popup,
+                                     .archetype = archetype,
                                      .size = getWindowSize(view_id)};
 
   lock.unlock();

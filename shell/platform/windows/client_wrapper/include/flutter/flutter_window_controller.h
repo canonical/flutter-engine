@@ -44,23 +44,11 @@ class FlutterWindowController {
   }
 
   void setEngine(std::shared_ptr<FlutterEngine> engine);
-  auto createRegularWindow(std::wstring const& title,
-                           Win32Window::Size const& size)
-      -> std::optional<FlutterWindowCreationResult>;
-  auto createDialogWindow(
-      std::wstring const& title,
-      Win32Window::Size const& size,
-      std::optional<FlutterViewId> parent_view_id = std::nullopt)
-      -> std::optional<FlutterWindowCreationResult>;
-  auto createSatelliteWindow(std::wstring const& title,
-                             Win32Window::Size const& size,
-                             FlutterWindowPositioner const& positioner,
-                             FlutterViewId parent_view_id)
-      -> std::optional<FlutterWindowCreationResult>;
-  auto createPopupWindow(std::wstring const& title,
-                         Win32Window::Size const& size,
-                         FlutterWindowPositioner const& positioner,
-                         FlutterViewId parent_view_id)
+  auto createWindow(std::wstring const& title,
+                    Win32Window::Size const& size,
+                    FlutterWindowArchetype archetype,
+                    std::optional<FlutterWindowPositioner> positioner,
+                    std::optional<FlutterViewId> parent_view_id)
       -> std::optional<FlutterWindowCreationResult>;
   auto destroyWindow(FlutterViewId view_id, bool destroy_native_window) -> bool;
   auto windows() const -> ViewWindowMap const&;
