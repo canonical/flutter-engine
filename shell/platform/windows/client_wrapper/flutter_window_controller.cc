@@ -11,7 +11,7 @@ auto const* const kErrorCodeInvalidValue{"INVALID_VALUE"};
 auto const* const kErrorCodeUnavailable{"UNAVAILABLE"};
 
 // Retrieves the value associated with |key| from |map|, ensuring it matches
-// the expected type T. Returns the value if found and correctly typed,
+// the expected type |T|. Returns the value if found and correctly typed,
 // otherwise logs an error in |result| and returns std::nullopt.
 template <typename T>
 auto getSingleValueForKey(std::string const& key,
@@ -35,8 +35,8 @@ auto getSingleValueForKey(std::string const& key,
 }
 
 // Retrieves a list of values associated with |key| from |map|, ensuring the
-// list has |Size| elements, all of type T. Returns the list if found and valid,
-// otherwise logs an error in |result| and returns std::nullopt.
+// list has |Size| elements, all of type |T|. Returns the list if found and
+// valid, otherwise logs an error in |result| and returns std::nullopt.
 template <typename T, size_t Size>
 auto getListValuesForKey(std::string const& key,
                          flutter::EncodableMap const* map,
@@ -76,9 +76,8 @@ auto getListValuesForKey(std::string const& key,
   return std::nullopt;
 }
 
-// Converts a flutter::FlutterWindowArchetype to its corresponding wide
-// string representation. Logs an error and aborts if the archetype is
-// unhandled.
+// Converts a |flutter::FlutterWindowArchetype| to its corresponding wide
+// string representation.
 auto archetypeToWideString(flutter::FlutterWindowArchetype archetype)
     -> std::wstring {
   switch (archetype) {
@@ -143,8 +142,8 @@ void handleCreateWindow(flutter::FlutterWindowArchetype archetype,
 
     auto const gravity{[](flutter::FlutterWindowPositioner::Anchor anchor)
                            -> flutter::FlutterWindowPositioner::Gravity {
-      // Convert from FlutterWindowPositioner::Anchor (originally a
-      // WindowPositionerAnchor) to FlutterWindowPositioner::Gravity
+      // Convert from |FlutterWindowPositioner::Anchor| (originally a
+      // |WindowPositionerAnchor|) to |FlutterWindowPositioner::Gravity|
       switch (anchor) {
         case flutter::FlutterWindowPositioner::Anchor::none:
           return flutter::FlutterWindowPositioner::Gravity::none;
@@ -385,7 +384,8 @@ auto FlutterWindowController::destroyWindow(FlutterViewId view_id,
       lock.unlock();
       if (window->archetype_ == FlutterWindowArchetype::dialog &&
           GetWindow(window->GetHandle(), GW_OWNER)) {
-        // Disable satellite hiding when a modal dialog is destroyed
+        // Temporarily disable satellite hiding while a modal dialog is being
+        // destroyed
         Win32Window::EnableSatelliteHiding(false);
       }
       DestroyWindow(window->GetHandle());

@@ -3,6 +3,7 @@
 #include "include/flutter/flutter_window_controller.h"
 
 #include <algorithm>
+#include <cassert>
 #include <iomanip>
 #include <sstream>
 
@@ -55,11 +56,11 @@ auto GetLastErrorAsString() -> std::string {
 // |positioner|. |window_size| is the original size of the window including its
 // drop-shadow area. |frame_size| is the original size of the window excluding
 // its drop-shadow area. |parent_hwnd| is the handle to the parent window.
-std::tuple<flutter::Win32Window::Point, flutter::Win32Window::Size>
-ApplyPositioner(flutter::FlutterWindowPositioner const& positioner,
-                flutter::Win32Window::Size const& window_size,
-                flutter::Win32Window::Size const& frame_size,
-                HWND parent_hwnd) {
+auto ApplyPositioner(flutter::FlutterWindowPositioner const& positioner,
+                     flutter::Win32Window::Size const& window_size,
+                     flutter::Win32Window::Size const& frame_size,
+                     HWND parent_hwnd)
+    -> std::tuple<flutter::Win32Window::Point, flutter::Win32Window::Size> {
   auto const dpr{FlutterDesktopGetDpiForHWND(parent_hwnd) /
                  static_cast<double>(USER_DEFAULT_SCREEN_DPI)};
   auto const monitor_rect{[](HWND hwnd) -> RECT {
@@ -481,18 +482,17 @@ auto GetWindowSizeForClientSize(flutter::Win32Window::Size client_size,
           static_cast<unsigned>(rect.bottom - rect.top)};
 }
 
-// Calculates the offset from the top-left corner of |window_b| to the top-left
-// corner of |window_a|. If either window handle is null or if the window
-// positions cannot be retrieved, the offset will be (0, 0).
-POINT GetOffsetBetweenWindows(HWND window_a, HWND window_b) {
+// Calculates the offset from the top-left corner of |from| to the top-left
+// corner of |to|. If either window handle is null or if the window positions
+// cannot be retrieved, the offset will be (0, 0).
+auto GetOffsetBetweenWindows(HWND from, HWND to) -> POINT {
   POINT offset{0, 0};
-  if (window_a && window_b) {
-    RECT window_a_rect;
-    RECT window_b_rect;
-    if (GetWindowRect(window_a, &window_a_rect) &&
-        GetWindowRect(window_b, &window_b_rect)) {
-      offset.x = window_a_rect.left - window_b_rect.left;
-      offset.y = window_a_rect.top - window_b_rect.top;
+  if (to && from) {
+    RECT to_rect;
+    RECT from_rect;
+    if (GetWindowRect(to, &to_rect) && GetWindowRect(from, &from_rect)) {
+      offset.x = to_rect.left - from_rect.left;
+      offset.y = to_rect.top - from_rect.top;
     }
   }
   return offset;
@@ -518,8 +518,10 @@ void EnableFullDpiSupportIfAvailable(HWND hwnd) {
   FreeLibrary(user32_module);
 }
 
+// Dynamically loads |SetWindowCompositionAttribute| from the User32 module uses
+// it to make the window's background transparent.
 void EnableTransparentWindowBackground(HWND hwnd) {
-  HMODULE user32_module = LoadLibraryA("User32.dll");
+  HMODULE const user32_module{LoadLibraryA("User32.dll")};
   if (!user32_module) {
     return;
   }
@@ -535,9 +537,9 @@ void EnableTransparentWindowBackground(HWND hwnd) {
   using SetWindowCompositionAttribute =
       BOOL(__stdcall*)(HWND, WINDOWCOMPOSITIONATTRIBDATA*);
 
-  auto set_window_composition_attribute =
+  auto set_window_composition_attribute{
       reinterpret_cast<SetWindowCompositionAttribute>(
-          GetProcAddress(user32_module, "SetWindowCompositionAttribute"));
+          GetProcAddress(user32_module, "SetWindowCompositionAttribute"))};
   if (set_window_composition_attribute != nullptr) {
     enum ACCENT_STATE { ACCENT_DISABLED = 0 };
 
@@ -548,18 +550,20 @@ void EnableTransparentWindowBackground(HWND hwnd) {
       DWORD AnimationId;
     };
 
-    ACCENT_POLICY accent = {ACCENT_DISABLED, 2, static_cast<DWORD>(0), 0};
+    // Set the accent policy to disable window composition
+    ACCENT_POLICY accent{ACCENT_DISABLED, 2, static_cast<DWORD>(0), 0};
     WINDOWCOMPOSITIONATTRIBDATA data{.Attrib = WCA_ACCENT_POLICY,
                                      .pvData = &accent,
                                      .cbData = sizeof(accent)};
     set_window_composition_attribute(hwnd, &data);
 
-    MARGINS const margins = {-1};
+    // Extend the frame into the client area and set the window's system
+    // backdrop type for visual effects
+    MARGINS const margins{-1};
     ::DwmExtendFrameIntoClientArea(hwnd, &margins);
-    BOOL const enable = TRUE;
-    INT effect_value = 1;
+    INT effect_value{1};
     ::DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &effect_value,
-                            sizeof(enable));
+                            sizeof(BOOL));
   }
 
   FreeLibrary(user32_module);
@@ -683,11 +687,12 @@ Win32Window::~Win32Window() {
   }
 }
 
-bool Win32Window::Create(std::wstring const& title,
+auto Win32Window::Create(std::wstring const& title,
                          Size const& client_size,
                          FlutterWindowArchetype archetype,
                          std::optional<HWND> parent,
-                         std::optional<FlutterWindowPositioner> positioner) {
+                         std::optional<FlutterWindowPositioner> positioner)
+    -> bool {
   archetype_ = archetype;
 
   DWORD window_style{};
@@ -814,13 +819,13 @@ bool Win32Window::Create(std::wstring const& title,
   if (parent) {
     if (auto* const owner_window{GetWindow(window_handle_, GW_OWNER)}) {
       offset_from_owner_ =
-          GetOffsetBetweenWindows(window_handle_, owner_window);
+          GetOffsetBetweenWindows(owner_window, window_handle_);
     }
   }
 
   UpdateTheme(window_handle_);
 
-  if (archetype == FlutterWindowArchetype::dialog) {
+  if (archetype == FlutterWindowArchetype::dialog && parent) {
     UpdateModalState();
   }
 
@@ -922,7 +927,7 @@ Win32Window::MessageHandler(HWND hwnd,
 
     case WM_NCACTIVATE:
       if (wparam == FALSE && archetype_ != FlutterWindowArchetype::popup) {
-        if (suppress_nc_inactive_redraw || num_child_popups_ > 0) {
+        if (!enable_redraw_non_client_as_inactive || num_child_popups_ > 0) {
           // If an inactive title bar is to be drawn, and this is a top-level
           // window with popups, force the title bar to be drawn in its active
           // colors
@@ -943,7 +948,7 @@ Win32Window::MessageHandler(HWND hwnd,
     case WM_MOVE: {
       if (auto* const owner_window{GetWindow(window_handle_, GW_OWNER)}) {
         offset_from_owner_ =
-            GetOffsetBetweenWindows(window_handle_, owner_window);
+            GetOffsetBetweenWindows(owner_window, window_handle_);
       }
 
       // Move satellites attached to this window
@@ -980,41 +985,43 @@ Win32Window::MessageHandler(HWND hwnd,
 }
 
 void Win32Window::CloseChildPopups() {
-  if (num_child_popups_ > 0) {
-    std::set<Win32Window*> popups;
-    for (auto* const child : children_) {
-      if (child->archetype_ == FlutterWindowArchetype::popup) {
-        popups.insert(child);
-      }
+  if (num_child_popups_ == 0) {
+    return;
+  }
+
+  std::set<Win32Window*> popups;
+  for (auto* const child : children_) {
+    if (child->archetype_ == FlutterWindowArchetype::popup) {
+      popups.insert(child);
     }
+  }
 
-    for (auto it{children_.begin()}; it != children_.end();) {
-      if ((*it)->archetype_ == FlutterWindowArchetype::popup) {
-        it = children_.erase(it);
-      } else {
-        ++it;
-      }
+  for (auto it{children_.begin()}; it != children_.end();) {
+    if ((*it)->archetype_ == FlutterWindowArchetype::popup) {
+      it = children_.erase(it);
+    } else {
+      ++it;
     }
+  }
 
-    for (auto* popup : popups) {
-      auto const parent_handle{GetParent(popup->window_handle_)};
-      auto const parent{GetThisFromHandle(parent_handle)};
+  for (auto* popup : popups) {
+    auto const parent_handle{GetParent(popup->window_handle_)};
+    auto* const parent{GetThisFromHandle(parent_handle)};
 
-      // Popups' parents are drawn with active colors even though they are
-      // actually inactive. When a popup is destroyed, the parent might be
-      // redrawn as inactive (reflecting its true state) before being redrawn as
-      // active. To prevent flickering during this transition, suppress the
-      // inactive redraw.
-      parent->suppress_nc_inactive_redraw = true;
-      DestroyWindow(popup->GetHandle());
-      parent->suppress_nc_inactive_redraw = false;
+    // Popups' parents are drawn with active colors even though they are
+    // actually inactive. When a popup is destroyed, the parent might be
+    // redrawn as inactive (reflecting its true state) before being redrawn as
+    // active. To prevent flickering during this transition, disables
+    // redrawing the non-client area as inactive.
+    parent->enable_redraw_non_client_as_inactive = false;
+    DestroyWindow(popup->GetHandle());
+    parent->enable_redraw_non_client_as_inactive = true;
 
-      // Repaint parent window to make sure its title bar is painted with the
-      // color based on its actual activation state
-      if (parent->num_child_popups_ == 0) {
-        SetWindowPos(parent_handle, nullptr, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-      }
+    // Repaint parent window to make sure its title bar is painted with the
+    // color based on its actual activation state
+    if (parent->num_child_popups_ == 0) {
+      SetWindowPos(parent_handle, nullptr, 0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
     }
   }
 }
@@ -1081,22 +1088,24 @@ void Win32Window::EnableWindowAndDescendants(bool enable) {
   }
 }
 
-auto Win32Window::FindDeepestDialog() -> Win32Window* {
-  Win32Window* deepest_dialog{nullptr};
-  if (archetype_ == FlutterWindowArchetype::dialog) {
-    deepest_dialog = this;
-  }
-  for (auto* const child : children_) {
-    if (auto* const child_deepest_dialog{child->FindDeepestDialog()}) {
-      deepest_dialog = child_deepest_dialog;
-    }
-  }
-  return deepest_dialog;
-}
-
 void Win32Window::UpdateModalState() {
+  auto const find_deepest_dialog{
+      [](Win32Window* window, auto&& self) -> Win32Window* {
+        Win32Window* deepest_dialog{nullptr};
+        if (window->archetype_ == FlutterWindowArchetype::dialog) {
+          deepest_dialog = window;
+        }
+        for (auto* const child : window->children_) {
+          if (auto* const child_deepest_dialog{self(child, self)}) {
+            deepest_dialog = child_deepest_dialog;
+          }
+        }
+        return deepest_dialog;
+      }};
+
   auto* const root_ancestor{GetThisFromHandle(GetRootAncestor(window_handle_))};
-  if (auto* const deepest_dialog{root_ancestor->FindDeepestDialog()}) {
+  if (auto* const deepest_dialog{
+          find_deepest_dialog(root_ancestor, find_deepest_dialog)}) {
     root_ancestor->EnableWindowAndDescendants(false);
     deepest_dialog->EnableWindowAndDescendants(true);
   } else {
@@ -1176,6 +1185,7 @@ void Win32Window::OnDestroy() {
       if (auto* const parent_window_handle{GetParent(window_handle_)}) {
         auto* const parent_window{GetThisFromHandle(parent_window_handle)};
         parent_window->children_.erase(this);
+        assert(parent_window->num_child_popups_ > 0);
         --parent_window->num_child_popups_;
       }
       break;
