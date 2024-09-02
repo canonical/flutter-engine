@@ -179,9 +179,8 @@ class Win32Window {
   // window handle for hosted content.
   HWND child_content_ = nullptr;
 
-  // Offset between the position of this window and the position of its
-  // parent.
-  POINT offset_from_parent_{0, 0};
+  // Offset between the position of this window and the position of its owner.
+  POINT offset_from_owner_{0, 0};
 
   // Prevents the non-client area from being redrawn as inactive when child
   // popups are being destroyed.

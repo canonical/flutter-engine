@@ -18,7 +18,9 @@ int g_active_window_count = 0;
 // Controls whether satellites can be hidden.
 bool g_enable_satellite_hiding{true};
 
-auto getLastErrorAsString() -> std::string {
+// Retrieves the calling thread's last-error code message as a string,
+// or a fallback message if the error message cannot be formatted.
+auto GetLastErrorAsString() -> std::string {
   LPWSTR message_buffer{nullptr};
 
   if (auto const size{FormatMessage(
@@ -49,12 +51,12 @@ auto getLastErrorAsString() -> std::string {
   return oss.str();
 }
 
-// Applies the `positioner` to determine the new origin and size of a window.
-// The `window_size` represents the original size including drop-shadow borders,
-// `frame_size` represents the original size excluding drop-shadow borders, and
-// `parent_hwnd` is the handle to the parent window.
+// Computes the origin and size of a window placed according to the specified
+// |positioner|. |window_size| is the original size of the window including its
+// drop-shadow area. |frame_size| is the original size of the window excluding
+// its drop-shadow area. |parent_hwnd| is the handle to the parent window.
 std::tuple<flutter::Win32Window::Point, flutter::Win32Window::Size>
-applyPositioner(flutter::FlutterWindowPositioner const& positioner,
+ApplyPositioner(flutter::FlutterWindowPositioner const& positioner,
                 flutter::Win32Window::Size const& window_size,
                 flutter::Win32Window::Size const& frame_size,
                 HWND parent_hwnd) {
@@ -396,12 +398,13 @@ applyPositioner(flutter::FlutterWindowPositioner const& positioner,
   return {new_origin, new_size};
 }
 
-// Estimate the window frame, in physical coordinates, for a window
-// with the given style, extended_style and parent window
-auto estimateWindowFrame(flutter::Win32Window::Size window_size,
-                         DWORD window_style,
-                         DWORD extended_window_style,
-                         HWND parent_hwnd) -> RECT {
+// Estimates the size of the window frame, in physical coordinates, based on
+// the given |window_size| (in physical coordinates) and the specified
+// |window_style|, |extended_window_style|, and parent window |parent_hwnd|.
+auto GetFrameSizeForWindowSize(flutter::Win32Window::Size window_size,
+                               DWORD window_style,
+                               DWORD extended_window_style,
+                               HWND parent_hwnd) -> flutter::Win32Window::Size {
   RECT frame_rect{0, 0, static_cast<LONG>(window_size.width),
                   static_cast<LONG>(window_size.height)};
 
@@ -423,16 +426,19 @@ auto estimateWindowFrame(flutter::Win32Window::Size window_size,
 
   UnregisterClass(window_class.lpszClassName, nullptr);
 
-  return frame_rect;
+  return {static_cast<unsigned>(frame_rect.right - frame_rect.left),
+          static_cast<unsigned>(frame_rect.bottom - frame_rect.top)};
 }
 
-// Calculate the required window rectangle, in physical coordinates, that
-// will accomodate the requested client size given in logical coordinates.
-// The window rectangle accounts for window borders and non-client areas.
-auto calculateWindowRect(flutter::Win32Window::Size client_size,
-                         DWORD window_style,
-                         DWORD extended_window_style,
-                         HWND parent_hwnd) -> RECT {
+// Calculates the required window size, in physical coordinates, to
+// accommodate the given |client_size| (in logical coordinates) for a window
+// with the specified |window_style| and |extended_window_style|. The result
+// accounts for window borders, non-client areas, and drop-shadow effects.
+auto GetWindowSizeForClientSize(flutter::Win32Window::Size client_size,
+                                DWORD window_style,
+                                DWORD extended_window_style,
+                                HWND parent_hwnd)
+    -> flutter::Win32Window::Size {
   auto const dpi{FlutterDesktopGetDpiForHWND(parent_hwnd)};
   auto const scale_factor{static_cast<double>(dpi) / USER_DEFAULT_SCREEN_DPI};
   RECT rect{.left = 0,
@@ -452,10 +458,11 @@ auto calculateWindowRect(flutter::Win32Window::Size client_size,
       if (adjust_window_rect_ext_for_dpi(&rect, window_style, FALSE,
                                          extended_window_style, dpi)) {
         FreeLibrary(user32_module);
-        return rect;
+        return {static_cast<unsigned>(rect.right - rect.left),
+                static_cast<unsigned>(rect.bottom - rect.top)};
       } else {
         std::cerr << "Failed to run AdjustWindowRectExForDpi: "
-                  << getLastErrorAsString() << '\n';
+                  << GetLastErrorAsString() << '\n';
       }
     } else {
       std::cerr << "Failed to retrieve AdjustWindowRectExForDpi address from "
@@ -467,25 +474,25 @@ auto calculateWindowRect(flutter::Win32Window::Size client_size,
   }
 
   if (!AdjustWindowRectEx(&rect, window_style, FALSE, extended_window_style)) {
-    std::cerr << "Failed to run AdjustWindowRectEx: " << getLastErrorAsString()
+    std::cerr << "Failed to run AdjustWindowRectEx: " << GetLastErrorAsString()
               << '\n';
-    return rect;
   }
-
-  return rect;
+  return {static_cast<unsigned>(rect.right - rect.left),
+          static_cast<unsigned>(rect.bottom - rect.top)};
 }
 
-// Calculate the offset between the position of a window and the position of its
-// parent.
-POINT CalculateWindowOffset(HWND window, HWND parent) {
+// Calculates the offset from the top-left corner of |window_b| to the top-left
+// corner of |window_a|. If either window handle is null or if the window
+// positions cannot be retrieved, the offset will be (0, 0).
+POINT GetOffsetBetweenWindows(HWND window_a, HWND window_b) {
   POINT offset{0, 0};
-  if (window && parent) {
-    RECT window_rect;
-    RECT parent_rect;
-    if (GetWindowRect(window, &window_rect) &&
-        GetWindowRect(parent, &parent_rect)) {
-      offset.x = window_rect.left - parent_rect.left;
-      offset.y = window_rect.top - parent_rect.top;
+  if (window_a && window_b) {
+    RECT window_a_rect;
+    RECT window_b_rect;
+    if (GetWindowRect(window_a, &window_a_rect) &&
+        GetWindowRect(window_b, &window_b_rect)) {
+      offset.x = window_a_rect.left - window_b_rect.left;
+      offset.y = window_a_rect.top - window_b_rect.top;
     }
   }
   return offset;
@@ -593,8 +600,7 @@ void UpdateTheme(HWND window) {
 
 auto GetParentOrOwner(HWND window) {
   auto const parent{GetParent(window)};
-  auto const owner{GetWindow(window, GW_OWNER)};
-  return parent ? parent : owner;
+  return parent ? parent : GetWindow(window, GW_OWNER);
 }
 
 auto GetRootAncestor(HWND window) -> HWND {
@@ -736,16 +742,14 @@ bool Win32Window::Create(std::wstring const& title,
       // TODO
       break;
     default:
+      std::cerr << "Unhandled window archetype: " << static_cast<int>(archetype)
+                << "\n";
       std::abort();
   }
 
-  auto window_size{[&]() -> Size {
-    auto const window_rect{calculateWindowRect(client_size, window_style,
-                                               extended_window_style,
-                                               parent.value_or(nullptr))};
-    return {static_cast<unsigned>(window_rect.right - window_rect.left),
-            static_cast<unsigned>(window_rect.bottom - window_rect.top)};
-  }()};
+  auto window_size{GetWindowSizeForClientSize(client_size, window_style,
+                                              extended_window_style,
+                                              parent.value_or(nullptr))};
 
   // Window position in physical coordinates.
   // Default positioning values (CW_USEDEFAULT) are used if the window
@@ -754,15 +758,12 @@ bool Win32Window::Create(std::wstring const& title,
     if (parent) {
       if (positioner) {
         // Adjust origin and size if a positioner is provided
-        auto const window_frame{estimateWindowFrame(window_size, window_style,
-                                                    extended_window_style,
-                                                    parent.value_or(nullptr))};
-        Size window_frame_size{
-            static_cast<unsigned>(window_frame.right - window_frame.left),
-            static_cast<unsigned>(window_frame.bottom - window_frame.top)};
+        auto const window_frame_size{GetFrameSizeForWindowSize(
+            window_size, window_style, extended_window_style,
+            parent.value_or(nullptr))};
         Point origin{0, 0};
         std::tie(origin, window_size) =
-            applyPositioner(positioner.value(), window_size, window_frame_size,
+            ApplyPositioner(positioner.value(), window_size, window_frame_size,
                             parent.value_or(nullptr));
         return {origin.x, origin.y};
       } else if (archetype == FlutterWindowArchetype::dialog && parent) {
@@ -770,9 +771,12 @@ bool Win32Window::Create(std::wstring const& title,
         RECT parent_frame;
         DwmGetWindowAttribute(parent.value(), DWMWA_EXTENDED_FRAME_BOUNDS,
                               &parent_frame, sizeof(parent_frame));
-        return {
-            (parent_frame.left + parent_frame.right - window_size.width) / 2,
-            (parent_frame.top + parent_frame.bottom - window_size.height) / 2};
+        return {(parent_frame.left + parent_frame.right -
+                 static_cast<LONG>(window_size.width)) /
+                    2,
+                (parent_frame.top + parent_frame.bottom -
+                 static_cast<LONG>(window_size.height)) /
+                    2};
       }
     }
     return {CW_USEDEFAULT, CW_USEDEFAULT};
@@ -787,7 +791,7 @@ bool Win32Window::Create(std::wstring const& title,
                  this);
 
   if (!window_handle_) {
-    auto const error_message{getLastErrorAsString()};
+    auto const error_message{GetLastErrorAsString()};
     std::cerr << "Cannot create window due to a CreateWindowEx error: "
               << error_message.c_str() << '\n';
     return false;
@@ -808,7 +812,10 @@ bool Win32Window::Create(std::wstring const& title,
                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
   if (parent) {
-    offset_from_parent_ = CalculateWindowOffset(window_handle_, parent.value());
+    if (auto* const owner_window{GetWindow(window_handle_, GW_OWNER)}) {
+      offset_from_owner_ =
+          GetOffsetBetweenWindows(window_handle_, owner_window);
+    }
   }
 
   UpdateTheme(window_handle_);
@@ -935,8 +942,8 @@ Win32Window::MessageHandler(HWND hwnd,
 
     case WM_MOVE: {
       if (auto* const owner_window{GetWindow(window_handle_, GW_OWNER)}) {
-        offset_from_parent_ =
-            CalculateWindowOffset(window_handle_, owner_window);
+        offset_from_owner_ =
+            GetOffsetBetweenWindows(window_handle_, owner_window);
       }
 
       // Move satellites attached to this window
@@ -947,8 +954,8 @@ Win32Window::MessageHandler(HWND hwnd,
           RECT rect_satellite;
           GetWindowRect(child->GetHandle(), &rect_satellite);
           MoveWindow(child->GetHandle(),
-                     rect.left + child->offset_from_parent_.x,
-                     rect.top + child->offset_from_parent_.y,
+                     rect.left + child->offset_from_owner_.x,
+                     rect.top + child->offset_from_owner_.y,
                      rect_satellite.right - rect_satellite.left,
                      rect_satellite.bottom - rect_satellite.top, FALSE);
         }

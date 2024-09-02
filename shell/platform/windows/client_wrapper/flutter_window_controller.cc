@@ -7,350 +7,278 @@
 
 namespace {
 auto const* const kChannel{"flutter/windowing"};
+auto const* const kErrorCodeInvalidValue{"INVALID_VALUE"};
+auto const* const kErrorCodeUnavailable{"UNAVAILABLE"};
 
-// Helper function to build a flutter::FlutterWindowPositioner
-// from a flutter::EncodableMap containing positioner settings.
-std::optional<flutter::FlutterWindowPositioner> buildPositioner(
-    flutter::EncodableMap const* map,
-    std::unique_ptr<flutter::MethodResult<>>& result) {
-  auto const anchor_rect_it{map->find(flutter::EncodableValue("anchorRect"))};
-  auto const positioner_parent_anchor_it{
-      map->find(flutter::EncodableValue("positionerParentAnchor"))};
-  auto const positioner_child_anchor_it{
-      map->find(flutter::EncodableValue("positionerChildAnchor"))};
-  auto const positioner_offset_it{
-      map->find(flutter::EncodableValue("positionerOffset"))};
-  auto const positioner_constraint_adjustment_it{
-      map->find(flutter::EncodableValue("positionerConstraintAdjustment"))};
+// Retrieves the value associated with |key| from |map|, ensuring it matches
+// the expected type T. Returns the value if found and correctly typed,
+// otherwise logs an error in |result| and returns std::nullopt.
+template <typename T>
+auto getSingleValueForKey(std::string const& key,
+                          flutter::EncodableMap const* map,
+                          std::unique_ptr<flutter::MethodResult<>>& result)
+    -> std::optional<T> {
+  if (auto const it{map->find(flutter::EncodableValue(key))};
+      it != map->end()) {
+    if (auto const* const value{std::get_if<T>(&it->second)}) {
+      return *value;
+    } else {
+      result->Error(kErrorCodeInvalidValue, "Value for '" + key +
+                                                "' key must be of type '" +
+                                                typeid(T).name() + "'.");
+    }
+  } else {
+    result->Error(kErrorCodeInvalidValue,
+                  "Map does not contain required '" + key + "' key.");
+  }
+  return std::nullopt;
+}
 
-  if (anchor_rect_it == map->end() ||
-      positioner_parent_anchor_it == map->end() ||
-      positioner_child_anchor_it == map->end() ||
-      positioner_offset_it == map->end() ||
-      positioner_constraint_adjustment_it == map->end()) {
-    result->Error("INVALID_VALUE",
-                  "Map does not contain required keys: {'anchorRect', "
-                  "'positionerParentAnchor', 'positionerChildAnchor', "
-                  "'positionerOffset', 'positionerConstraintAdjustment'}.");
-    return std::nullopt;
+// Retrieves a list of values associated with |key| from |map|, ensuring the
+// list has |Size| elements, all of type T. Returns the list if found and valid,
+// otherwise logs an error in |result| and returns std::nullopt.
+template <typename T, size_t Size>
+auto getListValuesForKey(std::string const& key,
+                         flutter::EncodableMap const* map,
+                         std::unique_ptr<flutter::MethodResult<>>& result)
+    -> std::optional<std::vector<T>> {
+  if (auto const it{map->find(flutter::EncodableValue(key))};
+      it != map->end()) {
+    if (auto const* const array{
+            std::get_if<std::vector<flutter::EncodableValue>>(&it->second)}) {
+      if (array->size() != Size) {
+        result->Error(kErrorCodeInvalidValue,
+                      "Array for '" + key + "' key must have " +
+                          std::to_string(Size) + " values.");
+        return std::nullopt;
+      }
+      std::vector<T> decoded_values;
+      for (auto const& value : *array) {
+        if (std::holds_alternative<T>(value)) {
+          decoded_values.push_back(std::get<T>(value));
+        } else {
+          result->Error(kErrorCodeInvalidValue,
+                        "Array for '" + key +
+                            "' key must only have values of type '" +
+                            typeid(T).name() + "'.");
+          return std::nullopt;
+        }
+      }
+      return decoded_values;
+    } else {
+      result->Error(kErrorCodeInvalidValue,
+                    "Value for '" + key + "' key must be an array.");
+    }
+  } else {
+    result->Error(kErrorCodeInvalidValue,
+                  "Map does not contain required '" + key + "' key.");
+  }
+  return std::nullopt;
+}
+
+// Converts a flutter::FlutterWindowArchetype to its corresponding wide
+// string representation. Logs an error and aborts if the archetype is
+// unhandled.
+auto archetypeToWideString(flutter::FlutterWindowArchetype archetype)
+    -> std::wstring {
+  switch (archetype) {
+    case flutter::FlutterWindowArchetype::regular:
+      return L"regular";
+    case flutter::FlutterWindowArchetype::floating_regular:
+      return L"floating_regular";
+    case flutter::FlutterWindowArchetype::dialog:
+      return L"dialog";
+    case flutter::FlutterWindowArchetype::satellite:
+      return L"satellite";
+    case flutter::FlutterWindowArchetype::popup:
+      return L"popup";
+    case flutter::FlutterWindowArchetype::tip:
+      return L"tip";
+  }
+  std::cerr
+      << "Unhandled window archetype encountered in archetypeToWideString: "
+      << static_cast<int>(archetype) << "\n";
+  std::abort();
+}
+
+void handleCreateWindow(flutter::FlutterWindowArchetype archetype,
+                        flutter::MethodCall<> const& call,
+                        std::unique_ptr<flutter::MethodResult<>>& result) {
+  auto const* const arguments{call.arguments()};
+  auto const* const map{std::get_if<flutter::EncodableMap>(arguments)};
+  if (!map) {
+    result->Error(kErrorCodeInvalidValue, "Method call argument is not a map.");
+    return;
   }
 
-  std::optional<flutter::FlutterWindowPositioner::Rect> anchor_rect;
-  if (auto const* const anchor_rect_list{
-          std::get_if<std::vector<flutter::EncodableValue>>(
-              &anchor_rect_it->second)}) {
-    if (anchor_rect_list->size() != 4) {
-      result->Error("INVALID_VALUE",
-                    "Values for 'anchorRect' must be an array of 4 integers.");
-      return std::nullopt;
-    } else if (!std::holds_alternative<int>(anchor_rect_list->at(0)) ||
-               !std::holds_alternative<int>(anchor_rect_list->at(1)) ||
-               !std::holds_alternative<int>(anchor_rect_list->at(2)) ||
-               !std::holds_alternative<int>(anchor_rect_list->at(3))) {
-      result->Error("INVALID_VALUE",
-                    "Values for 'anchorRect' must be of type int.");
-      return std::nullopt;
+  std::wstring const title{archetypeToWideString(archetype)};
+
+  auto const size_list{getListValuesForKey<int, 2>("size", map, result)};
+  if (!size_list) {
+    return;
+  }
+
+  std::optional<flutter::FlutterWindowPositioner> positioner;
+  if (archetype == flutter::FlutterWindowArchetype::satellite ||
+      archetype == flutter::FlutterWindowArchetype::popup) {
+    std::optional<flutter::FlutterWindowPositioner::Rect> anchor_rect;
+    auto const anchor_rect_list{
+        getListValuesForKey<int, 4>("anchorRect", map, result)};
+    if (!anchor_rect_list) {
+      return;
     }
     anchor_rect = flutter::FlutterWindowPositioner::Rect{
-        .x = std::get<int>(anchor_rect_list->at(0)),
-        .y = std::get<int>(anchor_rect_list->at(1)),
-        .width = std::get<int>(anchor_rect_list->at(2)),
-        .height = std::get<int>(anchor_rect_list->at(3))};
-  }
+        .x = anchor_rect_list->at(0),
+        .y = anchor_rect_list->at(1),
+        .width = anchor_rect_list->at(2),
+        .height = anchor_rect_list->at(3)};
 
-  auto const* const positioner_parent_anchor{
-      std::get_if<int>(&positioner_parent_anchor_it->second)};
-  if (!positioner_parent_anchor) {
-    result->Error("INVALID_VALUE",
-                  "Value for 'positionerParentAnchor' must be of type int.");
-    return std::nullopt;
-  }
-
-  auto const* const positioner_child_anchor{
-      std::get_if<int>(&positioner_child_anchor_it->second)};
-  if (!positioner_child_anchor) {
-    result->Error("INVALID_VALUE",
-                  "Value for 'positionerChildAnchor' must be of type int.");
-    return std::nullopt;
-  }
-
-  // Convert from anchor (originally a WindowPositionerAnchor) to
-  // flutter::FlutterWindowPositioner::Gravity
-  auto const gravity{[](flutter::FlutterWindowPositioner::Anchor anchor)
-                         -> flutter::FlutterWindowPositioner::Gravity {
-    switch (anchor) {
-      case flutter::FlutterWindowPositioner::Anchor::none:
-        return flutter::FlutterWindowPositioner::Gravity::none;
-      case flutter::FlutterWindowPositioner::Anchor::top:
-        return flutter::FlutterWindowPositioner::Gravity::bottom;
-      case flutter::FlutterWindowPositioner::Anchor::bottom:
-        return flutter::FlutterWindowPositioner::Gravity::top;
-      case flutter::FlutterWindowPositioner::Anchor::left:
-        return flutter::FlutterWindowPositioner::Gravity::right;
-      case flutter::FlutterWindowPositioner::Anchor::right:
-        return flutter::FlutterWindowPositioner::Gravity::left;
-      case flutter::FlutterWindowPositioner::Anchor::top_left:
-        return flutter::FlutterWindowPositioner::Gravity::bottom_right;
-      case flutter::FlutterWindowPositioner::Anchor::bottom_left:
-        return flutter::FlutterWindowPositioner::Gravity::top_right;
-      case flutter::FlutterWindowPositioner::Anchor::top_right:
-        return flutter::FlutterWindowPositioner::Gravity::bottom_left;
-      case flutter::FlutterWindowPositioner::Anchor::bottom_right:
-        return flutter::FlutterWindowPositioner::Gravity::top_left;
-      default:
-        return flutter::FlutterWindowPositioner::Gravity::none;
+    auto const positioner_parent_anchor{
+        getSingleValueForKey<int>("positionerParentAnchor", map, result)};
+    auto const positioner_child_anchor{
+        getSingleValueForKey<int>("positionerChildAnchor", map, result)};
+    if (!positioner_parent_anchor || !positioner_child_anchor) {
+      return;
     }
-  }(static_cast<flutter::FlutterWindowPositioner::Anchor>(
-                             *positioner_child_anchor))};
 
-  auto const* const positioner_offset_list{
-      std::get_if<std::vector<flutter::EncodableValue>>(
-          &positioner_offset_it->second)};
-  if (positioner_offset_list->size() != 2 ||
-      !std::holds_alternative<int>(positioner_offset_list->at(0)) ||
-      !std::holds_alternative<int>(positioner_offset_list->at(1))) {
-    result->Error("INVALID_VALUE",
-                  "Values for 'positionerOffset' must be of type int.");
-    return std::nullopt;
+    auto const gravity{[](flutter::FlutterWindowPositioner::Anchor anchor)
+                           -> flutter::FlutterWindowPositioner::Gravity {
+      // Convert from FlutterWindowPositioner::Anchor (originally a
+      // WindowPositionerAnchor) to FlutterWindowPositioner::Gravity
+      switch (anchor) {
+        case flutter::FlutterWindowPositioner::Anchor::none:
+          return flutter::FlutterWindowPositioner::Gravity::none;
+        case flutter::FlutterWindowPositioner::Anchor::top:
+          return flutter::FlutterWindowPositioner::Gravity::bottom;
+        case flutter::FlutterWindowPositioner::Anchor::bottom:
+          return flutter::FlutterWindowPositioner::Gravity::top;
+        case flutter::FlutterWindowPositioner::Anchor::left:
+          return flutter::FlutterWindowPositioner::Gravity::right;
+        case flutter::FlutterWindowPositioner::Anchor::right:
+          return flutter::FlutterWindowPositioner::Gravity::left;
+        case flutter::FlutterWindowPositioner::Anchor::top_left:
+          return flutter::FlutterWindowPositioner::Gravity::bottom_right;
+        case flutter::FlutterWindowPositioner::Anchor::bottom_left:
+          return flutter::FlutterWindowPositioner::Gravity::top_right;
+        case flutter::FlutterWindowPositioner::Anchor::top_right:
+          return flutter::FlutterWindowPositioner::Gravity::bottom_left;
+        case flutter::FlutterWindowPositioner::Anchor::bottom_right:
+          return flutter::FlutterWindowPositioner::Gravity::top_left;
+        default:
+          return flutter::FlutterWindowPositioner::Gravity::none;
+      }
+    }(static_cast<flutter::FlutterWindowPositioner::Anchor>(
+                               positioner_child_anchor.value()))};
+
+    auto const positioner_offset_list{
+        getListValuesForKey<int, 2>("positionerOffset", map, result)};
+    if (!positioner_offset_list) {
+      return;
+    }
+    auto const positioner_constraint_adjustment{getSingleValueForKey<int>(
+        "positionerConstraintAdjustment", map, result)};
+    if (!positioner_constraint_adjustment) {
+      return;
+    }
+    positioner = flutter::FlutterWindowPositioner{
+        .anchor_rect = anchor_rect,
+        .anchor = static_cast<flutter::FlutterWindowPositioner::Anchor>(
+            positioner_parent_anchor.value()),
+        .gravity = gravity,
+        .offset = {.dx = positioner_offset_list->at(0),
+                   .dy = positioner_offset_list->at(1)},
+        .constraint_adjustment =
+            static_cast<uint32_t>(positioner_constraint_adjustment.value())};
   }
-  auto const dx{std::get<int>(positioner_offset_list->at(0))};
-  auto const dy{std::get<int>(positioner_offset_list->at(1))};
 
-  auto const* const positioner_constraint_adjustment{
-      std::get_if<int>(&positioner_constraint_adjustment_it->second)};
-  if (!positioner_constraint_adjustment) {
-    result->Error(
-        "INVALID_VALUE",
-        "Value for 'positionerConstraintAdjustment' must be of type int.");
-    return std::nullopt;
+  std::optional<flutter::FlutterViewId> parent_view_id;
+  if (archetype == flutter::FlutterWindowArchetype::dialog ||
+      archetype == flutter::FlutterWindowArchetype::satellite ||
+      archetype == flutter::FlutterWindowArchetype::popup) {
+    if (auto const parent_it{map->find(flutter::EncodableValue("parent"))};
+        parent_it != map->end()) {
+      if (parent_it->second.IsNull()) {
+        if (archetype != flutter::FlutterWindowArchetype::dialog) {
+          result->Error(kErrorCodeInvalidValue,
+                        "Value for 'parent' key must not be null.");
+          return;
+        }
+      } else {
+        if (auto const* const parent{std::get_if<int>(&parent_it->second)}) {
+          parent_view_id = *parent >= 0
+                               ? std::optional<flutter::FlutterViewId>(*parent)
+                               : std::nullopt;
+          if (!parent_view_id.has_value() &&
+              (archetype == flutter::FlutterWindowArchetype::satellite ||
+               archetype == flutter::FlutterWindowArchetype::popup)) {
+            result->Error(kErrorCodeInvalidValue,
+                          "Value for 'parent' key (" +
+                              std::to_string(parent_view_id.value()) +
+                              ") must be nonnegative.");
+            return;
+          }
+        } else {
+          result->Error(kErrorCodeInvalidValue,
+                        "Value for 'parent' key must be of type int.");
+          return;
+        }
+      }
+    } else {
+      result->Error(kErrorCodeInvalidValue,
+                    "Map does not contain required 'parent' key.");
+      return;
+    }
   }
 
-  return flutter::FlutterWindowPositioner{
-      .anchor_rect = anchor_rect,
-      .anchor = static_cast<flutter::FlutterWindowPositioner::Anchor>(
-          *positioner_parent_anchor),
-      .gravity = gravity,
-      .offset = {.dx = dx, .dy = dy},
-      .constraint_adjustment =
-          static_cast<uint32_t>(*positioner_constraint_adjustment)};
-}
-
-// Encodes the attributes of a FlutterWindowCreationResult into an EncodableMap
-// wrapped in an EncodableValue.
-flutter::EncodableValue encodeWindowCreationResult(
-    flutter::FlutterWindowCreationResult const& result) {
-  return flutter::EncodableValue(flutter::EncodableMap{
-      {flutter::EncodableValue("viewId"),
-       flutter::EncodableValue(result.view_id)},
-      {flutter::EncodableValue("parentViewId"),
-       result.parent_id ? flutter::EncodableValue(*result.parent_id)
+  if (auto const data_opt{
+          flutter::FlutterWindowController::instance().createWindow(
+              title,
+              {static_cast<unsigned int>(size_list->at(0)),
+               static_cast<unsigned int>(size_list->at(1))},
+              archetype, positioner, parent_view_id)}) {
+    auto const& data{data_opt.value()};
+    result->Success(flutter::EncodableValue(flutter::EncodableMap{
+        {flutter::EncodableValue("viewId"),
+         flutter::EncodableValue(data.view_id)},
+        {flutter::EncodableValue("parentViewId"),
+         data.parent_id ? flutter::EncodableValue(data.parent_id.value())
                         : flutter::EncodableValue()},
-      {flutter::EncodableValue("archetype"),
-       flutter::EncodableValue(static_cast<int>(result.archetype))},
-      {flutter::EncodableValue("width"),
-       flutter::EncodableValue(result.size.width)},
-      {flutter::EncodableValue("height"),
-       flutter::EncodableValue((result.size.height))}});
-}
-
-void handleCreateRegularWindow(
-    flutter::MethodCall<> const& call,
-    std::unique_ptr<flutter::MethodResult<>>& result) {
-  auto const* const arguments{call.arguments()};
-  if (auto const* const map{std::get_if<flutter::EncodableMap>(arguments)}) {
-    auto const size_it{map->find(flutter::EncodableValue("size"))};
-
-    if (size_it != map->end()) {
-      auto const* const size_list{
-          std::get_if<std::vector<flutter::EncodableValue>>(&size_it->second)};
-      if (size_list->size() != 2 ||
-          !std::holds_alternative<int>(size_list->at(0)) ||
-          !std::holds_alternative<int>(size_list->at(1))) {
-        result->Error("INVALID_VALUE",
-                      "Values for 'size' must be of type int.");
-        return;
-      }
-      auto const width{std::get<int>(size_list->at(0))};
-      auto const height{std::get<int>(size_list->at(1))};
-      flutter::Win32Window::Size const size{static_cast<unsigned int>(width),
-                                            static_cast<unsigned int>(height)};
-
-      if (auto const data{
-              flutter::FlutterWindowController::instance().createWindow(
-                  L"regular", size, flutter::FlutterWindowArchetype::regular,
-                  std::nullopt, std::nullopt)}) {
-        result->Success(encodeWindowCreationResult(data.value()));
-      } else {
-        result->Error("UNAVAILABLE", "Can't create window.");
-      }
-    } else {
-      result->Error("INVALID_VALUE",
-                    "Map does not contain required key: 'size'.");
-    }
+        {flutter::EncodableValue("archetype"),
+         flutter::EncodableValue(static_cast<int>(data.archetype))},
+        {flutter::EncodableValue("width"),
+         flutter::EncodableValue(data.size.width)},
+        {flutter::EncodableValue("height"),
+         flutter::EncodableValue((data.size.height))}}));
   } else {
-    result->Error("INVALID_VALUE", "Value argument is not a map.");
-  }
-}
-
-void handleCreateDialogWindow(
-    flutter::MethodCall<> const& call,
-    std::unique_ptr<flutter::MethodResult<>>& result) {
-  auto const* const arguments{call.arguments()};
-  if (auto const* const map{std::get_if<flutter::EncodableMap>(arguments)}) {
-    auto const parent_it{map->find(flutter::EncodableValue("parent"))};
-    auto const size_it{map->find(flutter::EncodableValue("size"))};
-
-    if (parent_it != map->end() && size_it != map->end()) {
-      auto const* const parent{std::get_if<int>(&parent_it->second)};
-      if (!parent) {
-        result->Error("INVALID_VALUE",
-                      "Value for 'parent' must be of type int.");
-        return;
-      }
-
-      auto const* const size_list{
-          std::get_if<std::vector<flutter::EncodableValue>>(&size_it->second)};
-      if (size_list->size() != 2 ||
-          !std::holds_alternative<int>(size_list->at(0)) ||
-          !std::holds_alternative<int>(size_list->at(1))) {
-        result->Error("INVALID_VALUE",
-                      "Values for 'size' must be of type int.");
-        return;
-      }
-      auto const width{std::get<int>(size_list->at(0))};
-      auto const height{std::get<int>(size_list->at(1))};
-      flutter::Win32Window::Size const size{static_cast<unsigned int>(width),
-                                            static_cast<unsigned int>(height)};
-
-      if (auto const data{
-              flutter::FlutterWindowController::instance().createWindow(
-                  L"dialog", size, flutter::FlutterWindowArchetype::dialog,
-                  std::nullopt,
-                  *parent >= 0 ? std::optional<flutter::FlutterViewId>{*parent}
-                               : std::nullopt)}) {
-        result->Success(encodeWindowCreationResult(data.value()));
-      } else {
-        result->Error("UNAVAILABLE", "Can't create window.");
-      }
-    } else {
-      result->Error("INVALID_VALUE",
-                    "Map does not contain required keys: {'parent', 'size'}.");
-    }
-  } else {
-    result->Error("INVALID_VALUE", "Value argument is not a map.");
-  }
-}
-
-void handleCreateSatelliteWindow(
-    flutter::MethodCall<> const& call,
-    std::unique_ptr<flutter::MethodResult<>>& result) {
-  auto const* const arguments{call.arguments()};
-  if (auto const* const map{std::get_if<flutter::EncodableMap>(arguments)}) {
-    auto const parent_it{map->find(flutter::EncodableValue("parent"))};
-    auto const size_it{map->find(flutter::EncodableValue("size"))};
-    if (parent_it != map->end() && size_it != map->end()) {
-      auto const* const parent{std::get_if<int>(&parent_it->second)};
-      if (!parent) {
-        result->Error("INVALID_VALUE",
-                      "Value for 'parent' must be of type int.");
-        return;
-      }
-
-      auto const* const size_list{
-          std::get_if<std::vector<flutter::EncodableValue>>(&size_it->second)};
-      if (size_list->size() != 2 ||
-          !std::holds_alternative<int>(size_list->at(0)) ||
-          !std::holds_alternative<int>(size_list->at(1))) {
-        result->Error("INVALID_VALUE",
-                      "Values for 'size' must be of type int.");
-        return;
-      }
-      auto const width{std::get<int>(size_list->at(0))};
-      auto const height{std::get<int>(size_list->at(1))};
-      flutter::Win32Window::Size const size{static_cast<unsigned int>(width),
-                                            static_cast<unsigned int>(height)};
-
-      if (auto const positioner{buildPositioner(map, result)}) {
-        if (auto const data{
-                flutter::FlutterWindowController::instance().createWindow(
-                    L"satellite", size,
-                    flutter::FlutterWindowArchetype::satellite, positioner,
-                    *parent)}) {
-          result->Success(encodeWindowCreationResult(data.value()));
-        } else {
-          result->Error("UNAVAILABLE", "Can't create window.");
-        }
-      }
-    } else {
-      result->Error("INVALID_VALUE",
-                    "Map does not contain required keys: {'parent', 'size'}.");
-    }
-  } else {
-    result->Error("INVALID_VALUE", "Value argument is not a map.");
-  }
-}
-
-void handleCreatePopupWindow(flutter::MethodCall<> const& call,
-                             std::unique_ptr<flutter::MethodResult<>>& result) {
-  auto const* const arguments{call.arguments()};
-  if (auto const* const map{std::get_if<flutter::EncodableMap>(arguments)}) {
-    auto const parent_it{map->find(flutter::EncodableValue("parent"))};
-    auto const size_it{map->find(flutter::EncodableValue("size"))};
-    if (parent_it != map->end() && size_it != map->end()) {
-      auto const* const parent{std::get_if<int>(&parent_it->second)};
-      if (!parent) {
-        result->Error("INVALID_VALUE",
-                      "Value for 'parent' must be of type int.");
-        return;
-      }
-
-      auto const* const size_list{
-          std::get_if<std::vector<flutter::EncodableValue>>(&size_it->second)};
-      if (size_list->size() != 2 ||
-          !std::holds_alternative<int>(size_list->at(0)) ||
-          !std::holds_alternative<int>(size_list->at(1))) {
-        result->Error("INVALID_VALUE",
-                      "Values for 'size' must be of type int.");
-        return;
-      }
-      auto const width{std::get<int>(size_list->at(0))};
-      auto const height{std::get<int>(size_list->at(1))};
-      flutter::Win32Window::Size const size{static_cast<unsigned int>(width),
-                                            static_cast<unsigned int>(height)};
-
-      if (auto const positioner{buildPositioner(map, result)}) {
-        if (auto const data{
-                flutter::FlutterWindowController::instance().createWindow(
-                    L"popup", size, flutter::FlutterWindowArchetype::popup,
-                    positioner, *parent)}) {
-          result->Success(encodeWindowCreationResult(data.value()));
-        } else {
-          result->Error("UNAVAILABLE", "Can't create window.");
-        }
-      }
-    } else {
-      result->Error("INVALID_VALUE",
-                    "Map does not contain required keys: {'parent', 'size'}.");
-    }
-  } else {
-    result->Error("INVALID_VALUE", "Value argument is not a map.");
+    result->Error(kErrorCodeUnavailable, "Can't create window.");
   }
 }
 
 void handleDestroyWindow(flutter::MethodCall<> const& call,
                          std::unique_ptr<flutter::MethodResult<>>& result) {
-  auto const arguments{
-      std::get<std::vector<flutter::EncodableValue>>(*call.arguments())};
-  if (arguments.size() != 1 || !std::holds_alternative<int>(arguments[0])) {
-    result->Error("INVALID_VALUE", "Value argument is not valid.");
+  auto const* const arguments{call.arguments()};
+  auto const* const map{std::get_if<flutter::EncodableMap>(arguments)};
+  if (!map) {
+    result->Error(kErrorCodeInvalidValue, "Method call argument is not a map.");
+    return;
+  }
+
+  auto const view_id{getSingleValueForKey<int>("viewId", map, result)};
+  if (!view_id) {
+    return;
+  }
+  if (view_id.value() < 0) {
+    result->Error(kErrorCodeInvalidValue, "Value for 'viewId' (" +
+                                              std::to_string(view_id.value()) +
+                                              ") must be nonnegative.");
+    return;
+  }
+
+  if (flutter::FlutterWindowController::instance().destroyWindow(
+          view_id.value(), true)) {
+    result->Success();
   } else {
-    auto const view_id{std::get<int>(arguments[0])};
-    if (flutter::FlutterWindowController::instance().destroyWindow(view_id,
-                                                                   true)) {
-      result->Success();
-    } else {
-      result->Error("UNAVAILABLE", "Can't destroy window.");
-    }
+    result->Error(kErrorCodeUnavailable, "Can't destroy window.");
   }
 }
 
@@ -366,13 +294,13 @@ void FlutterWindowController::initializeChannel() {
         [this](MethodCall<> const& call,
                std::unique_ptr<MethodResult<>> result) {
           if (call.method_name() == "createRegularWindow") {
-            handleCreateRegularWindow(call, result);
+            handleCreateWindow(FlutterWindowArchetype::regular, call, result);
           } else if (call.method_name() == "createDialogWindow") {
-            handleCreateDialogWindow(call, result);
+            handleCreateWindow(FlutterWindowArchetype::dialog, call, result);
           } else if (call.method_name() == "createSatelliteWindow") {
-            handleCreateSatelliteWindow(call, result);
+            handleCreateWindow(FlutterWindowArchetype::satellite, call, result);
           } else if (call.method_name() == "createPopupWindow") {
-            handleCreatePopupWindow(call, result);
+            handleCreateWindow(FlutterWindowArchetype::popup, call, result);
           } else if (call.method_name() == "destroyWindow") {
             handleDestroyWindow(call, result);
           } else {
@@ -504,13 +432,13 @@ void FlutterWindowController::sendOnWindowCreated(
   if (channel_) {
     channel_->InvokeMethod(
         "onWindowCreated",
-        std::make_unique<EncodableValue>(
-            EncodableMap{{EncodableValue("viewId"), EncodableValue(view_id)},
-                         {EncodableValue("parentViewId"),
-                          parent_view_id ? EncodableValue(*parent_view_id)
-                                         : EncodableValue()},
-                         {EncodableValue("archetype"),
-                          EncodableValue(static_cast<int>(archetype))}}));
+        std::make_unique<EncodableValue>(EncodableMap{
+            {EncodableValue("viewId"), EncodableValue(view_id)},
+            {EncodableValue("parentViewId"),
+             parent_view_id ? EncodableValue(parent_view_id.value())
+                            : EncodableValue()},
+            {EncodableValue("archetype"),
+             EncodableValue(static_cast<int>(archetype))}}));
   }
 }
 
