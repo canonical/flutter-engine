@@ -14,10 +14,10 @@ auto const* const kErrorCodeUnavailable{"UNAVAILABLE"};
 // the expected type |T|. Returns the value if found and correctly typed,
 // otherwise logs an error in |result| and returns std::nullopt.
 template <typename T>
-auto getSingleValueForKey(std::string const& key,
-                          flutter::EncodableMap const* map,
-                          std::unique_ptr<flutter::MethodResult<>>& result)
-    -> std::optional<T> {
+auto getSingleValueForKeyOrSendError(
+    std::string const& key,
+    flutter::EncodableMap const* map,
+    std::unique_ptr<flutter::MethodResult<>>& result) -> std::optional<T> {
   if (auto const it{map->find(flutter::EncodableValue(key))};
       it != map->end()) {
     if (auto const* const value{std::get_if<T>(&it->second)}) {
@@ -38,9 +38,10 @@ auto getSingleValueForKey(std::string const& key,
 // list has |Size| elements, all of type |T|. Returns the list if found and
 // valid, otherwise logs an error in |result| and returns std::nullopt.
 template <typename T, size_t Size>
-auto getListValuesForKey(std::string const& key,
-                         flutter::EncodableMap const* map,
-                         std::unique_ptr<flutter::MethodResult<>>& result)
+auto getListValuesForKeyOrSendError(
+    std::string const& key,
+    flutter::EncodableMap const* map,
+    std::unique_ptr<flutter::MethodResult<>>& result)
     -> std::optional<std::vector<T>> {
   if (auto const it{map->find(flutter::EncodableValue(key))};
       it != map->end()) {
@@ -112,30 +113,37 @@ void handleCreateWindow(flutter::FlutterWindowArchetype archetype,
 
   std::wstring const title{archetypeToWideString(archetype)};
 
-  auto const size_list{getListValuesForKey<int, 2>("size", map, result)};
+  auto const size_list{
+      getListValuesForKeyOrSendError<int, 2>("size", map, result)};
   if (!size_list) {
+    return;
+  }
+  if (size_list->at(0) < 0 || size_list->at(1) < 0) {
+    result->Error(
+        kErrorCodeInvalidValue,
+        "Values for 'size' key ({" + std::to_string(size_list->at(0)) + ", " +
+            std::to_string(size_list->at(1)) + "}) must be nonnegative.");
     return;
   }
 
   std::optional<flutter::FlutterWindowPositioner> positioner;
   if (archetype == flutter::FlutterWindowArchetype::satellite ||
       archetype == flutter::FlutterWindowArchetype::popup) {
-    std::optional<flutter::FlutterWindowPositioner::Rect> anchor_rect;
     auto const anchor_rect_list{
-        getListValuesForKey<int, 4>("anchorRect", map, result)};
+        getListValuesForKeyOrSendError<int, 4>("anchorRect", map, result)};
     if (!anchor_rect_list) {
       return;
     }
-    anchor_rect = flutter::FlutterWindowPositioner::Rect{
+    auto const anchor_rect{flutter::FlutterWindowPositioner::Rect{
         .x = anchor_rect_list->at(0),
         .y = anchor_rect_list->at(1),
         .width = anchor_rect_list->at(2),
-        .height = anchor_rect_list->at(3)};
+        .height = anchor_rect_list->at(3)}};
 
-    auto const positioner_parent_anchor{
-        getSingleValueForKey<int>("positionerParentAnchor", map, result)};
-    auto const positioner_child_anchor{
-        getSingleValueForKey<int>("positionerChildAnchor", map, result)};
+    auto const positioner_parent_anchor{getSingleValueForKeyOrSendError<int>(
+        "positionerParentAnchor", map, result)};
+    auto const positioner_child_anchor{getSingleValueForKeyOrSendError<int>(
+        "positionerChildAnchor", map, result)};
     if (!positioner_parent_anchor || !positioner_child_anchor) {
       return;
     }
@@ -163,19 +171,21 @@ void handleCreateWindow(flutter::FlutterWindowArchetype archetype,
           return flutter::FlutterWindowPositioner::Gravity::bottom_left;
         case flutter::FlutterWindowPositioner::Anchor::bottom_right:
           return flutter::FlutterWindowPositioner::Gravity::top_left;
-        default:
-          return flutter::FlutterWindowPositioner::Gravity::none;
       }
+      std::cerr << "Unhandled anchor value: " << static_cast<int>(anchor)
+                << "\n";
+      std::abort();
     }(static_cast<flutter::FlutterWindowPositioner::Anchor>(
                                positioner_child_anchor.value()))};
 
-    auto const positioner_offset_list{
-        getListValuesForKey<int, 2>("positionerOffset", map, result)};
+    auto const positioner_offset_list{getListValuesForKeyOrSendError<int, 2>(
+        "positionerOffset", map, result)};
     if (!positioner_offset_list) {
       return;
     }
-    auto const positioner_constraint_adjustment{getSingleValueForKey<int>(
-        "positionerConstraintAdjustment", map, result)};
+    auto const positioner_constraint_adjustment{
+        getSingleValueForKeyOrSendError<int>("positionerConstraintAdjustment",
+                                             map, result)};
     if (!positioner_constraint_adjustment) {
       return;
     }
@@ -262,7 +272,8 @@ void handleDestroyWindow(flutter::MethodCall<> const& call,
     return;
   }
 
-  auto const view_id{getSingleValueForKey<int>("viewId", map, result)};
+  auto const view_id{
+      getSingleValueForKeyOrSendError<int>("viewId", map, result)};
   if (!view_id) {
     return;
   }
@@ -384,8 +395,10 @@ auto FlutterWindowController::destroyWindow(FlutterViewId view_id,
       lock.unlock();
       if (window->archetype_ == FlutterWindowArchetype::dialog &&
           GetWindow(window->GetHandle(), GW_OWNER)) {
-        // Temporarily disable satellite hiding while a modal dialog is being
-        // destroyed
+        // Temporarily disable satellite hiding. This prevents satellites from
+        // flickering because of briefly hiding and showing between the
+        // destruction of a modal dialog and the transfer of focus to the owner
+        // window.
         Win32Window::EnableSatelliteHiding(false);
       }
       DestroyWindow(window->GetHandle());

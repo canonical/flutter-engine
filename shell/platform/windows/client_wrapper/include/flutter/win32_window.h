@@ -161,11 +161,9 @@ class Win32Window {
   // Retrieves a class instance pointer for |window|.
   static auto GetThisFromHandle(HWND window) noexcept -> Win32Window*;
 
-  // Controls whether satellites can be hidden. By default, when a window and
-  // all its children become inactive, its satellites will be hidden. However,
-  // when a modal dialog is destroyed, satellite hiding needs to be temporarily
-  // disabled by the controller to prevent flickering caused by WM_ACTIVATE
-  // events that can briefly hide and show the satellites.
+  // Controls whether satellites are hidden when their top-level window
+  // and all its children become inactive. Enabled by default, this setting
+  // applies globally.
   static void EnableSatelliteHiding(bool enable);
 
   // The window's archetype (e.g., regular, dialog, popup).
@@ -193,7 +191,7 @@ class Win32Window {
   // Controls whether the non-client area can be redrawn as inactive.
   // Enabled by default, but temporarily disabled during child popup destruction
   // to prevent flickering.
-  bool enable_redraw_non_client_as_inactive{true};
+  bool enable_redraw_non_client_as_inactive_{true};
 
   // Closes the popups of this window.
   void CloseChildPopups();

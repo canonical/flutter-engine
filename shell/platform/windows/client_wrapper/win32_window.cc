@@ -602,7 +602,7 @@ void UpdateTheme(HWND window) {
   }
 }
 
-auto GetParentOrOwner(HWND window) {
+auto GetParentOrOwner(HWND window) -> HWND {
   auto const parent{GetParent(window)};
   return parent ? parent : GetWindow(window, GW_OWNER);
 }
@@ -927,7 +927,7 @@ Win32Window::MessageHandler(HWND hwnd,
 
     case WM_NCACTIVATE:
       if (wparam == FALSE && archetype_ != FlutterWindowArchetype::popup) {
-        if (!enable_redraw_non_client_as_inactive || num_child_popups_ > 0) {
+        if (!enable_redraw_non_client_as_inactive_ || num_child_popups_ > 0) {
           // If an inactive title bar is to be drawn, and this is a top-level
           // window with popups, force the title bar to be drawn in its active
           // colors
@@ -1013,9 +1013,9 @@ void Win32Window::CloseChildPopups() {
     // redrawn as inactive (reflecting its true state) before being redrawn as
     // active. To prevent flickering during this transition, disables
     // redrawing the non-client area as inactive.
-    parent->enable_redraw_non_client_as_inactive = false;
+    parent->enable_redraw_non_client_as_inactive_ = false;
     DestroyWindow(popup->GetHandle());
-    parent->enable_redraw_non_client_as_inactive = true;
+    parent->enable_redraw_non_client_as_inactive_ = true;
 
     // Repaint parent window to make sure its title bar is painted with the
     // color based on its actual activation state
