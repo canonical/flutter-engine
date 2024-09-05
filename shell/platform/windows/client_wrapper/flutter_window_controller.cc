@@ -142,9 +142,12 @@ void handleCreateWindow(flutter::FlutterWindowArchetype archetype,
 
     auto const positioner_parent_anchor{getSingleValueForKeyOrSendError<int>(
         "positionerParentAnchor", map, result)};
+    if (!positioner_parent_anchor) {
+      return;
+    }
     auto const positioner_child_anchor{getSingleValueForKeyOrSendError<int>(
         "positionerChildAnchor", map, result)};
-    if (!positioner_parent_anchor || !positioner_child_anchor) {
+    if (!positioner_child_anchor) {
       return;
     }
 

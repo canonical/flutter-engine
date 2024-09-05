@@ -730,6 +730,9 @@ auto Win32Window::Create(std::wstring const& title,
           SetFocus(parent_window->child_content_);
         }
         parent_window->children_.insert(this);
+      } else {
+        std::cerr << "The parent of a satellite must not be null.\n";
+        std::abort();
       }
       break;
     case FlutterWindowArchetype::popup:
