@@ -599,19 +599,6 @@ void UpdateTheme(HWND window) {
   }
 }
 
-auto GetRootAncestor(HWND window) -> HWND {
-  auto const get_parent_or_owner{[](HWND window) -> HWND {
-    auto const parent{GetParent(window)};
-    return parent ? parent : GetWindow(window, GW_OWNER);
-  }};
-
-  auto* root_ancestor{window};
-  while (get_parent_or_owner(root_ancestor)) {
-    root_ancestor = get_parent_or_owner(root_ancestor);
-  }
-  return root_ancestor;
-}
-
 }  // namespace
 
 namespace flutter {
@@ -880,12 +867,14 @@ Win32Window::MessageHandler(HWND hwnd,
     }
     case WM_SIZE: {
       if (wparam == SIZE_MAXIMIZED) {
+        // Hide satellites of the maximized window
         for (auto* const child : children_) {
           if (child->archetype_ == FlutterWindowArchetype::satellite) {
             ShowWindow(child->GetHandle(), SW_HIDE);
           }
         }
       } else if (wparam == SIZE_RESTORED) {
+        // Show satellites of the restored window
         for (auto* const child : children_) {
           if (child->archetype_ == FlutterWindowArchetype::satellite) {
             ShowWindow(child->GetHandle(), SW_SHOWNOACTIVATE);
@@ -893,7 +882,7 @@ Win32Window::MessageHandler(HWND hwnd,
         }
       }
       if (child_content_ != nullptr) {
-        // Size and position the child window.
+        // Resize and reposition the child content window
         auto const rect{GetClientArea()};
         MoveWindow(child_content_, rect.left, rect.top, rect.right - rect.left,
                    rect.bottom - rect.top, TRUE);
@@ -1044,7 +1033,17 @@ void Win32Window::UpdateModalState() {
         return deepest_dialog;
       }};
 
-  auto* const root_ancestor{GetThisFromHandle(GetRootAncestor(window_handle_))};
+  auto const get_parent_or_owner{[](HWND window) -> HWND {
+    auto const parent{GetParent(window)};
+    return parent ? parent : GetWindow(window, GW_OWNER);
+  }};
+
+  auto* root_ancestor_handle{window_handle_};
+  while (auto* next{get_parent_or_owner(root_ancestor_handle)}) {
+    root_ancestor_handle = next;
+  }
+  auto* const root_ancestor{GetThisFromHandle(root_ancestor_handle)};
+
   if (auto* const deepest_dialog{
           find_deepest_dialog(root_ancestor, find_deepest_dialog)}) {
     root_ancestor->EnableWindowAndDescendants(false);
