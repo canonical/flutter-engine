@@ -10,6 +10,10 @@ auto const* const kChannel{"flutter/windowing"};
 auto const* const kErrorCodeInvalidValue{"INVALID_VALUE"};
 auto const* const kErrorCodeUnavailable{"UNAVAILABLE"};
 
+// Controls whether satellites are hidden when their top-level window
+// and all its children become inactive.
+bool g_enable_satellite_hiding{true};
+
 // Retrieves the value associated with |key| from |map|, ensuring it matches
 // the expected type |T|. Returns the value if found and correctly typed,
 // otherwise logs an error in |result| and returns std::nullopt.
@@ -295,6 +299,11 @@ void handleDestroyWindow(flutter::MethodCall<> const& call,
   }
 }
 
+auto getParentOrOwner(HWND window) -> HWND {
+  auto const parent{GetParent(window)};
+  return parent ? parent : GetWindow(window, GW_OWNER);
+}
+
 }  // namespace
 
 namespace flutter {
@@ -402,10 +411,10 @@ auto FlutterWindowController::destroyWindow(FlutterViewId view_id,
         // flickering because of briefly hiding and showing between the
         // destruction of a modal dialog and the transfer of focus to the owner
         // window.
-        Win32Window::EnableSatelliteHiding(false);
+        g_enable_satellite_hiding = false;
       }
       DestroyWindow(window->GetHandle());
-      Win32Window::EnableSatelliteHiding(true);
+      g_enable_satellite_hiding = true;
       lock.lock();
     } else {
       sendOnWindowDestroyed(view_id);
@@ -502,6 +511,74 @@ FlutterWindowSize FlutterWindowController::getWindowSize(
   auto const width{frame.right - frame.left};
   auto const height{frame.bottom - frame.top};
   return {static_cast<int>(width), static_cast<int>(height)};
+}
+
+void FlutterWindowController::hideWindowsSatellites(HWND opt_out_window) {
+  if (!g_enable_satellite_hiding) {
+    return;
+  }
+
+  // Helper function to check whether |window| is a descendant of |ancestor|.
+  auto const is_descendant_of{[](HWND window, HWND ancestor) -> bool {
+    auto current{ancestor};
+    while (current) {
+      current = getParentOrOwner(current);
+      if (current == window) {
+        return true;
+      }
+    }
+    return false;
+  }};
+
+  // Helper function to check whether |window| has a child dialog.
+  auto const has_dialog{[](Win32Window* window) -> bool {
+    for (auto* const child : window->children_) {
+      if (child->archetype_ == FlutterWindowArchetype::dialog) {
+        return true;
+      }
+    }
+    return false;
+  }};
+
+  std::lock_guard const lock(mutex_);
+  for (auto const& [_, window] : windows_) {
+    if (window->window_handle_ == opt_out_window ||
+        is_descendant_of(window->window_handle_, opt_out_window)) {
+      continue;
+    }
+
+    for (auto* const child : window->children_) {
+      if (child->archetype_ != FlutterWindowArchetype::satellite) {
+        continue;
+      }
+      if (!has_dialog(child)) {
+        ShowWindow(child->window_handle_, SW_HIDE);
+      }
+    }
+  }
+}
+
+void FlutterWindowController::showWindowAndAncestorsSatellites(HWND window) {
+  if (!g_enable_satellite_hiding) {
+    return;
+  }
+
+  auto current{window};
+  while (current) {
+    for (auto* const child :
+         Win32Window::GetThisFromHandle(current)->children_) {
+      if (child->archetype_ == FlutterWindowArchetype::satellite) {
+        ShowWindow(child->window_handle_, SW_SHOWNOACTIVATE);
+      }
+    }
+    current = getParentOrOwner(current);
+  }
+
+  // Hide satellites of all other top-level windows
+  if (Win32Window::GetThisFromHandle(window)->archetype_ !=
+      FlutterWindowArchetype::satellite) {
+    hideWindowsSatellites(window);
+  }
 }
 
 }  // namespace flutter

@@ -56,6 +56,7 @@ class FlutterWindowController {
 
  private:
   friend class FlutterWin32Window;
+  friend class Win32Window;
 
   FlutterWindowController() = default;
 
@@ -67,6 +68,13 @@ class FlutterWindowController {
   void sendOnWindowResized(FlutterViewId view_id) const;
   void cleanupClosedWindows();
   FlutterWindowSize getWindowSize(flutter::FlutterViewId view_id) const;
+
+  // Hides all satellite windows in the application, except those that are
+  // descendants of |opt_out_window| or have a dialog as a child. By default,
+  // |opt_out_window| is null, so no window is excluded.
+  void hideWindowsSatellites(HWND opt_out_window = nullptr);
+  // Shows the satellite windows of |window| and of its ancestors.
+  void showWindowAndAncestorsSatellites(HWND window);
 
   mutable std::mutex mutex_;
   std::unique_ptr<MethodChannel<>> channel_;

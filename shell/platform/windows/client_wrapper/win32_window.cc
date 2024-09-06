@@ -16,9 +16,6 @@ constexpr const wchar_t kWindowClassName[] = L"FLUTTER_WIN32_WINDOW";
 // The number of Win32Window objects that currently exist.
 int g_active_window_count = 0;
 
-// Controls whether satellites can be hidden.
-bool g_enable_satellite_hiding{true};
-
 // Retrieves the calling thread's last-error code message as a string,
 // or a fallback message if the error message cannot be formatted.
 auto GetLastErrorAsString() -> std::string {
@@ -602,15 +599,15 @@ void UpdateTheme(HWND window) {
   }
 }
 
-auto GetParentOrOwner(HWND window) -> HWND {
-  auto const parent{GetParent(window)};
-  return parent ? parent : GetWindow(window, GW_OWNER);
-}
-
 auto GetRootAncestor(HWND window) -> HWND {
+  auto const get_parent_or_owner{[](HWND window) -> HWND {
+    auto const parent{GetParent(window)};
+    return parent ? parent : GetWindow(window, GW_OWNER);
+  }};
+
   auto* root_ancestor{window};
-  while (GetParentOrOwner(root_ancestor)) {
-    root_ancestor = GetParentOrOwner(root_ancestor);
+  while (get_parent_or_owner(root_ancestor)) {
+    root_ancestor = get_parent_or_owner(root_ancestor);
   }
   return root_ancestor;
 }
@@ -915,12 +912,8 @@ Win32Window::MessageHandler(HWND hwnd,
           }
         }
         CloseChildPopups();
-        if (g_enable_satellite_hiding) {
-          ShowWindowAndAncestorsSatellites();
-          if (archetype_ != FlutterWindowArchetype::satellite) {
-            HideWindowsSatellites(false);
-          }
-        }
+        FlutterWindowController::instance().showWindowAndAncestorsSatellites(
+            window_handle_);
       }
 
       if (child_content_ != nullptr) {
@@ -944,7 +937,7 @@ Win32Window::MessageHandler(HWND hwnd,
         // Close child popups and hide satellites from all windows if a window
         // belonging to a different application is being activated
         CloseChildPopups();
-        HideWindowsSatellites(true);
+        FlutterWindowController::instance().hideWindowsSatellites(nullptr);
       }
       return 0;
 
@@ -1029,61 +1022,6 @@ void Win32Window::CloseChildPopups() {
   }
 }
 
-void Win32Window::HideWindowsSatellites(bool include_child_satellites) {
-  if (!g_enable_satellite_hiding) {
-    return;
-  }
-
-  auto const is_ancestor{[this](HWND window) {
-    auto current{window_handle_};
-    while (current) {
-      current = GetParentOrOwner(current);
-      if (current == window) {
-        return true;
-      }
-    }
-    return false;
-  }};
-
-  for (auto const& [_, window] :
-       FlutterWindowController::instance().windows()) {
-    if ((include_child_satellites ||
-         window->window_handle_ != window_handle_) &&
-        !is_ancestor(window->window_handle_)) {
-      for (auto* const child : window->children_) {
-        if (child->archetype_ == FlutterWindowArchetype::satellite) {
-          auto const has_dialog_child{[](Win32Window* window) {
-            for (auto* const child : window->children_) {
-              if (child->archetype_ == FlutterWindowArchetype::dialog) {
-                return true;
-              }
-            }
-            return false;
-          }(child)};
-          // Ensure that the satellite is not hidden if it has a dialog as a
-          // child, as hiding the satellite would obscure the content the dialog
-          // is modal to.
-          if (!has_dialog_child) {
-            ShowWindow(child->window_handle_, SW_HIDE);
-          }
-        }
-      }
-    }
-  }
-}
-
-void Win32Window::ShowWindowAndAncestorsSatellites() {
-  auto window{window_handle_};
-  while (window) {
-    for (auto* const child : GetThisFromHandle(window)->children_) {
-      if (child->archetype_ == FlutterWindowArchetype::satellite) {
-        ShowWindow(child->window_handle_, SW_SHOWNOACTIVATE);
-      }
-    }
-    window = GetParentOrOwner(window);
-  }
-}
-
 void Win32Window::EnableWindowAndDescendants(bool enable) {
   EnableWindow(window_handle_, enable);
   for (auto* const child : children_) {
@@ -1123,10 +1061,6 @@ void Win32Window::Destroy() {
 Win32Window* Win32Window::GetThisFromHandle(HWND window) noexcept {
   return reinterpret_cast<Win32Window*>(
       GetWindowLongPtr(window, GWLP_USERDATA));
-}
-
-void Win32Window::EnableSatelliteHiding(bool enable) {
-  g_enable_satellite_hiding = enable;
 }
 
 void Win32Window::SetChildContent(HWND content) {

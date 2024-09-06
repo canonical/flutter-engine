@@ -161,11 +161,6 @@ class Win32Window {
   // Retrieves a class instance pointer for |window|.
   static auto GetThisFromHandle(HWND window) noexcept -> Win32Window*;
 
-  // Controls whether satellites are hidden when their top-level window
-  // and all its children become inactive. Enabled by default, this setting
-  // applies globally.
-  static void EnableSatelliteHiding(bool enable);
-
   // The window's archetype (e.g., regular, dialog, popup).
   FlutterWindowArchetype archetype_{FlutterWindowArchetype::regular};
 
@@ -195,15 +190,6 @@ class Win32Window {
 
   // Closes the popups of this window.
   void CloseChildPopups();
-
-  // Hides all satellite windows in the application, except for those that are
-  // descendants of the current window or have a dialog as a child. If
-  // |include_child_satellites| is true, the current window's satellites are
-  // also considered for hiding.
-  void HideWindowsSatellites(bool include_child_satellites);
-
-  // Shows the satellite windows of this window and of its ancestors.
-  void ShowWindowAndAncestorsSatellites();
 
   // Enables or disables this window and all its descendants.
   void EnableWindowAndDescendants(bool enable);
