@@ -123,26 +123,38 @@ void handleCreateWindow(flutter::FlutterWindowArchetype archetype,
     return;
   }
   if (size_list->at(0) < 0 || size_list->at(1) < 0) {
-    result->Error(
-        kErrorCodeInvalidValue,
-        "Values for 'size' key ({" + std::to_string(size_list->at(0)) + ", " +
-            std::to_string(size_list->at(1)) + "}) must be nonnegative.");
+    result->Error(kErrorCodeInvalidValue,
+                  "Values for 'size' key (" + std::to_string(size_list->at(0)) +
+                      ", " + std::to_string(size_list->at(1)) +
+                      ") must be nonnegative.");
     return;
   }
 
   std::optional<flutter::FlutterWindowPositioner> positioner;
+  std::optional<flutter::FlutterWindowPositioner::Rect> anchor_rect;
+
   if (archetype == flutter::FlutterWindowArchetype::satellite ||
       archetype == flutter::FlutterWindowArchetype::popup) {
-    auto const anchor_rect_list{
-        getListValuesForKeyOrSendError<int, 4>("anchorRect", map, result)};
-    if (!anchor_rect_list) {
+    if (auto const anchor_rect_it{
+            map->find(flutter::EncodableValue("anchorRect"))};
+        anchor_rect_it != map->end()) {
+      if (!anchor_rect_it->second.IsNull()) {
+        auto const anchor_rect_list{
+            getListValuesForKeyOrSendError<int, 4>("anchorRect", map, result)};
+        if (!anchor_rect_list) {
+          return;
+        }
+        anchor_rect = flutter::FlutterWindowPositioner::Rect{
+            .x = anchor_rect_list->at(0),
+            .y = anchor_rect_list->at(1),
+            .width = anchor_rect_list->at(2),
+            .height = anchor_rect_list->at(3)};
+      }
+    } else {
+      result->Error(kErrorCodeInvalidValue,
+                    "Map does not contain required 'anchorRect' key.");
       return;
     }
-    auto const anchor_rect{flutter::FlutterWindowPositioner::Rect{
-        .x = anchor_rect_list->at(0),
-        .y = anchor_rect_list->at(1),
-        .width = anchor_rect_list->at(2),
-        .height = anchor_rect_list->at(3)}};
 
     auto const positioner_parent_anchor{getSingleValueForKeyOrSendError<int>(
         "positionerParentAnchor", map, result)};
