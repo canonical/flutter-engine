@@ -789,8 +789,10 @@ auto Win32Window::Create(std::wstring const& title,
     return false;
   }
 
-  // Adjust the window position so that its origin is the top-left corner of the
-  // window frame
+  // Adjust the window position so its origin aligns with the top-left corner
+  // of the window frame, not the window rectangle (which includes the
+  // drop-shadow). This adjustment must be done post-creation since the frame
+  // rectangle is only available after the window has been created.
   RECT frame_rect;
   DwmGetWindowAttribute(window_handle_, DWMWA_EXTENDED_FRAME_BOUNDS,
                         &frame_rect, sizeof(frame_rect));

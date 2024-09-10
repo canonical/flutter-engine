@@ -169,7 +169,7 @@ class Win32Window {
 
   // The number of popups in |children_|, used to quickly check whether this
   // window has any popups.
-  size_t num_child_popups_{};
+  size_t num_child_popups_{0};
 
   // Indicates whether closing this window will quit the application.
   bool quit_on_close_{false};
