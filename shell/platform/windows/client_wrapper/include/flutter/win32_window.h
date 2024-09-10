@@ -79,7 +79,7 @@ struct FlutterWindowPositioner {
 
 // A class abstraction for a high DPI-aware Win32 Window. Intended to be
 // inherited from by classes that wish to specialize with custom
-// rendering and input handling
+// rendering and input handling.
 class Win32Window {
  public:
   struct Point {
@@ -98,17 +98,18 @@ class Win32Window {
   Win32Window();
   virtual ~Win32Window();
 
-  // Creates a win32 window with |title| that is positioned and sized using
-  // |origin| and |size|. New windows are created on the default monitor. Window
-  // sizes are specified to the OS in physical pixels, hence to ensure a
-  // consistent size this function will scale the inputted width and height as
-  // as appropriate for the default monitor. The window is invisible until
-  // |Show| is called. Returns true if the window was created successfully.
-  bool Create(std::wstring const& title,
-              Size const& size,
+  // Creates a Win32 window with the specified |title| and |client_size|. The
+  // window style is determined by |archetype|. For
+  // |FlutterWindowArchetype::satellite| and |FlutterWindowArchetype::popup|,
+  // both |parent| and |positioner| must be provided; |positioner| is used only
+  // for these archetypes. For |FlutterWindowArchetype::dialog|, a modal dialog
+  // is created if |parent| is specified; otherwise, the dialog is modeless.
+  // After creation, |OnCreate| is called and its result is returned.
+  auto Create(std::wstring const& title,
+              Size const& client_size,
               FlutterWindowArchetype archetype,
-              std::optional<Point> origin,
-              std::optional<HWND> parent);
+              std::optional<HWND> parent,
+              std::optional<FlutterWindowPositioner> positioner) -> bool;
 
   // Release OS resources associated with window.
   void Destroy();
@@ -116,61 +117,89 @@ class Win32Window {
   // Inserts |content| into the window tree.
   void SetChildContent(HWND content);
 
-  // Returns the backing Window handle to enable clients to set icon and other
+  // Returns the backing window handle to enable clients to set icon and other
   // window properties. Returns nullptr if the window has been destroyed.
-  HWND GetHandle();
+  auto GetHandle() -> HWND;
 
   // If true, closing this window will quit the application.
   void SetQuitOnClose(bool quit_on_close);
   auto GetQuitOnClose() const -> bool;
 
-  // Return a RECT representing the bounds of the current client area.
-  RECT GetClientArea();
+  // Returns the bounds of the current client area.
+  auto GetClientArea() -> RECT;
 
  protected:
   // Processes and route salient window messages for mouse handling,
   // size change and DPI. Delegates handling of these to member overloads that
   // inheriting classes can handle.
-  virtual LRESULT MessageHandler(HWND hwnd,
-                                 UINT message,
-                                 WPARAM wparam,
-                                 LPARAM lparam);
+  virtual auto MessageHandler(HWND hwnd,
+                              UINT message,
+                              WPARAM wparam,
+                              LPARAM lparam) -> LRESULT;
 
-  // Called when CreateAndShow is called, allowing subclass window-related
-  // setup. Subclasses should return false if setup fails.
-  virtual bool OnCreate();
+  // Called when Create is called, allowing subclass window-related setup.
+  // Subclasses should return false if setup fails.
+  virtual auto OnCreate() -> bool;
 
   // Called when Destroy is called.
   virtual void OnDestroy();
 
-  FlutterWindowArchetype archetype_{FlutterWindowArchetype::regular};
-  std::set<Win32Window*> child_popups_;
-
  private:
   friend class WindowClassRegistrar;
+  friend class FlutterWindowController;
 
   // OS callback called by message pump. Handles the WM_NCCREATE message which
   // is passed when the non-client area is being created and enables automatic
   // non-client DPI scaling so that the non-client area automatically
   // responds to changes in DPI. All other messages are handled by
   // MessageHandler.
-  static LRESULT CALLBACK WndProc(HWND window,
-                                  UINT message,
-                                  WPARAM wparam,
-                                  LPARAM lparam);
+  static auto CALLBACK WndProc(HWND window,
+                               UINT message,
+                               WPARAM wparam,
+                               LPARAM lparam) -> LRESULT;
 
-  // Retrieves a class instance pointer for |window|
-  static Win32Window* GetThisFromHandle(HWND window) noexcept;
+  // Retrieves a class instance pointer for |window|.
+  static auto GetThisFromHandle(HWND window) noexcept -> Win32Window*;
 
-  bool quit_on_close_ = false;
+  // The window's archetype (e.g., regular, dialog, popup).
+  FlutterWindowArchetype archetype_{FlutterWindowArchetype::regular};
 
-  // window handle for top level window.
-  HWND window_handle_ = nullptr;
+  // Windows that have this window as their parent or owner.
+  std::set<Win32Window*> children_;
 
-  // window handle for hosted content.
-  HWND child_content_ = nullptr;
+  // The number of popups in |children_|, used to quickly check whether this
+  // window has any popups.
+  size_t num_child_popups_{0};
 
+  // Indicates whether closing this window will quit the application.
+  bool quit_on_close_{false};
+
+  // Handle for the top-level window.
+  HWND window_handle_{nullptr};
+
+  // Handle for hosted child content window.
+  HWND child_content_{nullptr};
+
+  // Offset between this window's position and its owner's position.
+  POINT offset_from_owner_{0, 0};
+
+  // Controls whether the non-client area can be redrawn as inactive.
+  // Enabled by default, but temporarily disabled during child popup destruction
+  // to prevent flickering.
+  bool enable_redraw_non_client_as_inactive_{true};
+
+  // Closes the popups of this window.
   void CloseChildPopups();
+
+  // Enables or disables this window and all its descendants.
+  void EnableWindowAndDescendants(bool enable);
+
+  // Enforces modal behavior by enabling the deepest dialog in the subtree
+  // rooted at the top-level window, along with its descendants, while
+  // disabling all other windows in the subtree. This ensures that the dialog
+  // and its children remain active and interactive. If no dialog is found,
+  // all windows in the subtree are enabled.
+  void UpdateModalState();
 };
 
 }  // namespace flutter

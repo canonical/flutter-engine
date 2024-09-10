@@ -44,20 +44,11 @@ class FlutterWindowController {
   }
 
   void setEngine(std::shared_ptr<FlutterEngine> engine);
-  auto createRegularWindow(std::wstring const& title,
-                           Win32Window::Size const& size)
-      -> std::optional<FlutterWindowCreationResult>;
-  auto createDialogWindow(
-      std::wstring const& title,
-      Win32Window::Size const& size,
-      std::optional<Win32Window::Point> origin,
-      std::optional<FlutterViewId> parent_view_id = std::nullopt)
-      -> std::optional<FlutterWindowCreationResult>;
-  auto createPopupWindow(
-      std::wstring const& title,
-      Win32Window::Point const& origin,
-      Win32Window::Size const& size,
-      std::optional<FlutterViewId> parent_view_id = std::nullopt)
+  auto createWindow(std::wstring const& title,
+                    Win32Window::Size const& size,
+                    FlutterWindowArchetype archetype,
+                    std::optional<FlutterWindowPositioner> positioner,
+                    std::optional<FlutterViewId> parent_view_id)
       -> std::optional<FlutterWindowCreationResult>;
   auto destroyWindow(FlutterViewId view_id, bool destroy_native_window) -> bool;
   auto windows() const -> ViewWindowMap const&;
@@ -65,6 +56,7 @@ class FlutterWindowController {
 
  private:
   friend class FlutterWin32Window;
+  friend class Win32Window;
 
   FlutterWindowController() = default;
 
@@ -76,6 +68,13 @@ class FlutterWindowController {
   void sendOnWindowResized(FlutterViewId view_id) const;
   void cleanupClosedWindows();
   FlutterWindowSize getWindowSize(flutter::FlutterViewId view_id) const;
+
+  // Hides all satellite windows in the application, except those that are
+  // descendants of |opt_out_window| or have a dialog as a child. By default,
+  // |opt_out_window| is null, so no window is excluded.
+  void hideWindowsSatellites(HWND opt_out_window = nullptr);
+  // Shows the satellite windows of |window| and of its ancestors.
+  void showWindowAndAncestorsSatellites(HWND window);
 
   mutable std::mutex mutex_;
   std::unique_ptr<MethodChannel<>> channel_;

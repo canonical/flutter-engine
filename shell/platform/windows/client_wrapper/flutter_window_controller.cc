@@ -3,670 +3,317 @@
 #include "include/flutter/encodable_value.h"
 #include "include/flutter/standard_method_codec.h"
 
-#include <algorithm>
-
 #include <dwmapi.h>
 
 namespace {
 auto const* const kChannel{"flutter/windowing"};
-auto const kBaseDpi{static_cast<double>(USER_DEFAULT_SCREEN_DPI)};
+auto const* const kErrorCodeInvalidValue{"INVALID_VALUE"};
+auto const* const kErrorCodeUnavailable{"UNAVAILABLE"};
 
-// Encodes the attributes of a FlutterWindowCreationResult into an EncodableMap
-// wrapped in an EncodableValue.
-flutter::EncodableValue encodeWindowCreationResult(
-    flutter::FlutterWindowCreationResult const& result) {
-  return flutter::EncodableValue(flutter::EncodableMap{
-      {flutter::EncodableValue("viewId"),
-       flutter::EncodableValue(result.view_id)},
-      {flutter::EncodableValue("parentViewId"),
-       result.parent_id ? flutter::EncodableValue(*result.parent_id)
-                        : flutter::EncodableValue()},
-      {flutter::EncodableValue("archetype"),
-       flutter::EncodableValue(static_cast<int>(result.archetype))},
-      {flutter::EncodableValue("width"),
-       flutter::EncodableValue(result.size.width)},
-      {flutter::EncodableValue("height"),
-       flutter::EncodableValue((result.size.height))}});
-}
+// Controls whether satellites are hidden when their top-level window
+// and all its children become inactive.
+bool g_enable_satellite_hiding{true};
 
-// Returns the origin point that will center a window of size 'size' within the
-// client area of the window identified by 'handle'.
-auto calculateCenteredOrigin(flutter::Win32Window::Size size,
-                             HWND handle) -> flutter::Win32Window::Point {
-  if (RECT frame; handle && GetWindowRect(handle, &frame)) {
-    POINT const target_point{frame.left, frame.top};
-    auto* const monitor{
-        MonitorFromPoint(target_point, MONITOR_DEFAULTTONEAREST)};
-    auto const dpr{FlutterDesktopGetDpiForMonitor(monitor) / kBaseDpi};
-    auto const centered_x{(frame.left + frame.right - size.width * dpr) / 2.0};
-    auto const centered_y{(frame.top + frame.bottom - size.height * dpr) / 2.0};
-    return {static_cast<unsigned int>(centered_x / dpr),
-            static_cast<unsigned int>(centered_y / dpr)};
-  }
-  return {0, 0};
-}
-
-std::tuple<flutter::Win32Window::Point, flutter::Win32Window::Size>
-applyPositioner(flutter::FlutterWindowPositioner const& positioner,
-                flutter::Win32Window::Size const& size,
-                flutter::FlutterViewId parent_view_id) {
-  auto const& windows{flutter::FlutterWindowController::instance().windows()};
-  auto const& parent_window{windows.at(parent_view_id)};
-  auto const& parent_hwnd{parent_window->GetHandle()};
-  auto const dpr{FlutterDesktopGetDpiForHWND(parent_hwnd) / kBaseDpi};
-  auto const monitor_rect{[](HWND hwnd) -> RECT {
-    auto* monitor{MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)};
-    MONITORINFO mi;
-    mi.cbSize = sizeof(MONITORINFO);
-    return GetMonitorInfo(monitor, &mi) ? mi.rcMonitor : RECT{0, 0, 0, 0};
-  }(parent_hwnd)};
-
-  struct RectF {
-    double left;
-    double top;
-    double right;
-    double bottom;
-  };
-  struct PointF {
-    double x;
-    double y;
-  };
-
-  auto const anchor_rect{[&]() -> RectF {
-    if (positioner.anchor_rect) {
-      // If the positioner's anchor rect is not std::nullopt, use it to anchor
-      // relative to the client area
-      RECT rect;
-      GetClientRect(parent_hwnd, &rect);
-      POINT top_left{rect.left, rect.top};
-      ClientToScreen(parent_hwnd, &top_left);
-      POINT bottom_right{rect.right, rect.bottom};
-      ClientToScreen(parent_hwnd, &bottom_right);
-
-      RectF anchor_rect_screen_space{
-          .left = top_left.x + positioner.anchor_rect->x * dpr,
-          .top = top_left.y + positioner.anchor_rect->y * dpr,
-          .right =
-              top_left.x +
-              (positioner.anchor_rect->x + positioner.anchor_rect->width) * dpr,
-          .bottom = top_left.y + (positioner.anchor_rect->y +
-                                  positioner.anchor_rect->height) *
-                                     dpr};
-      // Ensure the anchor rect stays within the bounds of the client rect
-      anchor_rect_screen_space.left = std::clamp(
-          anchor_rect_screen_space.left, static_cast<double>(top_left.x),
-          static_cast<double>(bottom_right.x));
-      anchor_rect_screen_space.top = std::clamp(
-          anchor_rect_screen_space.top, static_cast<double>(top_left.y),
-          static_cast<double>(bottom_right.y));
-      anchor_rect_screen_space.right = std::clamp(
-          anchor_rect_screen_space.right, static_cast<double>(top_left.x),
-          static_cast<double>(bottom_right.x));
-      anchor_rect_screen_space.bottom = std::clamp(
-          anchor_rect_screen_space.bottom, static_cast<double>(top_left.y),
-          static_cast<double>(bottom_right.y));
-      return anchor_rect_screen_space;
+// Retrieves the value associated with |key| from |map|, ensuring it matches
+// the expected type |T|. Returns the value if found and correctly typed,
+// otherwise logs an error in |result| and returns std::nullopt.
+template <typename T>
+auto getSingleValueForKeyOrSendError(
+    std::string const& key,
+    flutter::EncodableMap const* map,
+    std::unique_ptr<flutter::MethodResult<>>& result) -> std::optional<T> {
+  if (auto const it{map->find(flutter::EncodableValue(key))};
+      it != map->end()) {
+    if (auto const* const value{std::get_if<T>(&it->second)}) {
+      return *value;
     } else {
-      // If the positioner's anchor rect is std::nullopt, create an anchor rect
-      // that is equal to the window frame area
-      RECT frame_rect;
-      DwmGetWindowAttribute(parent_hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,
-                            &frame_rect, sizeof(frame_rect));
-      return {static_cast<double>(frame_rect.left),
-              static_cast<double>(frame_rect.top),
-              static_cast<double>(frame_rect.right),
-              static_cast<double>(frame_rect.bottom)};
+      result->Error(kErrorCodeInvalidValue, "Value for '" + key +
+                                                "' key must be of type '" +
+                                                typeid(T).name() + "'.");
     }
-  }()};
-
-  PointF const center{.x = (anchor_rect.left + anchor_rect.right) / 2.0,
-                      .y = (anchor_rect.top + anchor_rect.bottom) / 2.0};
-  PointF child_size{size.width * dpr, size.height * dpr};
-  PointF const child_center{child_size.x / 2.0, child_size.y / 2.0};
-
-  auto const get_parent_anchor_point{
-      [&](flutter::FlutterWindowPositioner::Anchor anchor) -> PointF {
-        switch (anchor) {
-          case flutter::FlutterWindowPositioner::Anchor::top:
-            return {center.x, anchor_rect.top};
-          case flutter::FlutterWindowPositioner::Anchor::bottom:
-            return {center.x, anchor_rect.bottom};
-          case flutter::FlutterWindowPositioner::Anchor::left:
-            return {anchor_rect.left, center.y};
-          case flutter::FlutterWindowPositioner::Anchor::right:
-            return {anchor_rect.right, center.y};
-          case flutter::FlutterWindowPositioner::Anchor::top_left:
-            return {anchor_rect.left, anchor_rect.top};
-          case flutter::FlutterWindowPositioner::Anchor::bottom_left:
-            return {anchor_rect.left, anchor_rect.bottom};
-          case flutter::FlutterWindowPositioner::Anchor::top_right:
-            return {anchor_rect.right, anchor_rect.top};
-          case flutter::FlutterWindowPositioner::Anchor::bottom_right:
-            return {anchor_rect.right, anchor_rect.bottom};
-          default:
-            return center;
-        }
-      }};
-
-  auto const get_child_anchor_point{
-      [&](flutter::FlutterWindowPositioner::Gravity gravity) -> PointF {
-        switch (gravity) {
-          case flutter::FlutterWindowPositioner::Gravity::top:
-            return {-child_center.x, -child_size.x};
-          case flutter::FlutterWindowPositioner::Gravity::bottom:
-            return {-child_center.x, 0};
-          case flutter::FlutterWindowPositioner::Gravity::left:
-            return {-child_size.x, -child_center.y};
-          case flutter::FlutterWindowPositioner::Gravity::right:
-            return {0, -child_center.y};
-          case flutter::FlutterWindowPositioner::Gravity::top_left:
-            return {-child_size.x, -child_size.y};
-          case flutter::FlutterWindowPositioner::Gravity::bottom_left:
-            return {-child_size.x, 0};
-          case flutter::FlutterWindowPositioner::Gravity::top_right:
-            return {0, -child_size.y};
-          case flutter::FlutterWindowPositioner::Gravity::bottom_right:
-            return {0, 0};
-          default:
-            return {-child_center.x, -child_center.y};
-        }
-      }};
-
-  auto const calculate_origin{[](PointF const& parent_anchor,
-                                 PointF const& child_anchor,
-                                 PointF const& offset) -> PointF {
-    return {.x = parent_anchor.x + child_anchor.x + offset.x,
-            .y = parent_anchor.y + child_anchor.y + offset.y};
-  }};
-
-  auto anchor{positioner.anchor};
-  auto gravity{positioner.gravity};
-  PointF offset{static_cast<double>(positioner.offset.dx),
-                static_cast<double>(positioner.offset.dy)};
-
-  auto parent_anchor_point{get_parent_anchor_point(anchor)};
-  auto child_anchor_point{get_child_anchor_point(gravity)};
-  PointF origin_dc{
-      calculate_origin(parent_anchor_point, child_anchor_point, offset)};
-
-  // Constraint adjustments
-
-  auto const is_constrained_along_x{[&]() {
-    return origin_dc.x < 0 || origin_dc.x + child_size.x > monitor_rect.right;
-  }};
-  auto const is_constrained_along_y{[&]() {
-    return origin_dc.y < 0 || origin_dc.y + child_size.y > monitor_rect.bottom;
-  }};
-
-  // X axis
-  if (is_constrained_along_x()) {
-    auto const reverse_anchor_along_x{
-        [](flutter::FlutterWindowPositioner::Anchor anchor) {
-          switch (anchor) {
-            case flutter::FlutterWindowPositioner::Anchor::left:
-              return flutter::FlutterWindowPositioner::Anchor::right;
-            case flutter::FlutterWindowPositioner::Anchor::right:
-              return flutter::FlutterWindowPositioner::Anchor::left;
-            case flutter::FlutterWindowPositioner::Anchor::top_left:
-              return flutter::FlutterWindowPositioner::Anchor::top_right;
-            case flutter::FlutterWindowPositioner::Anchor::bottom_left:
-              return flutter::FlutterWindowPositioner::Anchor::bottom_right;
-            case flutter::FlutterWindowPositioner::Anchor::top_right:
-              return flutter::FlutterWindowPositioner::Anchor::top_left;
-            case flutter::FlutterWindowPositioner::Anchor::bottom_right:
-              return flutter::FlutterWindowPositioner::Anchor::bottom_left;
-            default:
-              return anchor;
-          }
-        }};
-
-    auto const reverse_gravity_along_x{
-        [](flutter::FlutterWindowPositioner::Gravity gravity) {
-          switch (gravity) {
-            case flutter::FlutterWindowPositioner::Gravity::left:
-              return flutter::FlutterWindowPositioner::Gravity::right;
-            case flutter::FlutterWindowPositioner::Gravity::right:
-              return flutter::FlutterWindowPositioner::Gravity::left;
-            case flutter::FlutterWindowPositioner::Gravity::top_left:
-              return flutter::FlutterWindowPositioner::Gravity::top_right;
-            case flutter::FlutterWindowPositioner::Gravity::bottom_left:
-              return flutter::FlutterWindowPositioner::Gravity::bottom_right;
-            case flutter::FlutterWindowPositioner::Gravity::top_right:
-              return flutter::FlutterWindowPositioner::Gravity::top_left;
-            case flutter::FlutterWindowPositioner::Gravity::bottom_right:
-              return flutter::FlutterWindowPositioner::Gravity::bottom_left;
-            default:
-              return gravity;
-          }
-        }};
-
-    if (positioner.constraint_adjustment &
-        static_cast<uint32_t>(
-            flutter::FlutterWindowPositioner::ConstraintAdjustment::flip_x)) {
-      anchor = reverse_anchor_along_x(anchor);
-      gravity = reverse_gravity_along_x(gravity);
-      parent_anchor_point = get_parent_anchor_point(anchor);
-      child_anchor_point = get_child_anchor_point(gravity);
-      auto const saved_origin_dc{std::exchange(
-          origin_dc,
-          calculate_origin(parent_anchor_point, child_anchor_point, offset))};
-      if (is_constrained_along_x()) {
-        origin_dc = saved_origin_dc;
-      }
-    } else if (positioner.constraint_adjustment &
-               static_cast<uint32_t>(flutter::FlutterWindowPositioner::
-                                         ConstraintAdjustment::slide_x)) {
-      // TODO: Slide towards the direction of the gravity first
-      if (origin_dc.x < 0) {
-        auto const diff{abs(origin_dc.x)};
-        offset = {offset.x + diff, offset.y};
-        origin_dc =
-            calculate_origin(parent_anchor_point, child_anchor_point, offset);
-      }
-      if (origin_dc.x + child_size.x > monitor_rect.right) {
-        auto const diff{(origin_dc.x + child_size.x) - monitor_rect.right};
-        offset = {offset.x - diff, offset.y};
-        origin_dc =
-            calculate_origin(parent_anchor_point, child_anchor_point, offset);
-      }
-    } else if (positioner.constraint_adjustment &
-               static_cast<uint32_t>(flutter::FlutterWindowPositioner::
-                                         ConstraintAdjustment::resize_x)) {
-      if (origin_dc.x < 0) {
-        auto const diff{std::clamp(abs(origin_dc.x), 1.0, child_size.x - 1)};
-        origin_dc.x += diff;
-        child_size.x -= diff;
-      }
-      if (origin_dc.x + child_size.x > monitor_rect.right) {
-        auto const diff{
-            std::clamp((origin_dc.x + child_size.x) - monitor_rect.right, 1.0,
-                       child_size.x - 1)};
-        child_size.x -= diff;
-      }
-    }
+  } else {
+    result->Error(kErrorCodeInvalidValue,
+                  "Map does not contain required '" + key + "' key.");
   }
-
-  // Y axis
-  if (is_constrained_along_y()) {
-    auto const reverse_anchor_along_y{
-        [](flutter::FlutterWindowPositioner::Anchor anchor) {
-          switch (anchor) {
-            case flutter::FlutterWindowPositioner::Anchor::top:
-              return flutter::FlutterWindowPositioner::Anchor::bottom;
-            case flutter::FlutterWindowPositioner::Anchor::bottom:
-              return flutter::FlutterWindowPositioner::Anchor::top;
-            case flutter::FlutterWindowPositioner::Anchor::top_left:
-              return flutter::FlutterWindowPositioner::Anchor::bottom_left;
-            case flutter::FlutterWindowPositioner::Anchor::bottom_left:
-              return flutter::FlutterWindowPositioner::Anchor::top_left;
-            case flutter::FlutterWindowPositioner::Anchor::top_right:
-              return flutter::FlutterWindowPositioner::Anchor::bottom_right;
-            case flutter::FlutterWindowPositioner::Anchor::bottom_right:
-              return flutter::FlutterWindowPositioner::Anchor::top_right;
-            default:
-              return anchor;
-          }
-        }};
-
-    auto const reverse_gravity_along_y{
-        [](flutter::FlutterWindowPositioner::Gravity gravity) {
-          switch (gravity) {
-            case flutter::FlutterWindowPositioner::Gravity::top:
-              return flutter::FlutterWindowPositioner::Gravity::bottom;
-            case flutter::FlutterWindowPositioner::Gravity::bottom:
-              return flutter::FlutterWindowPositioner::Gravity::top;
-            case flutter::FlutterWindowPositioner::Gravity::top_left:
-              return flutter::FlutterWindowPositioner::Gravity::bottom_left;
-            case flutter::FlutterWindowPositioner::Gravity::bottom_left:
-              return flutter::FlutterWindowPositioner::Gravity::top_left;
-            case flutter::FlutterWindowPositioner::Gravity::top_right:
-              return flutter::FlutterWindowPositioner::Gravity::bottom_right;
-            case flutter::FlutterWindowPositioner::Gravity::bottom_right:
-              return flutter::FlutterWindowPositioner::Gravity::top_right;
-            default:
-              return gravity;
-          }
-        }};
-
-    if (positioner.constraint_adjustment &
-        static_cast<uint32_t>(
-            flutter::FlutterWindowPositioner::ConstraintAdjustment::flip_y)) {
-      anchor = reverse_anchor_along_y(anchor);
-      gravity = reverse_gravity_along_y(gravity);
-      parent_anchor_point = get_parent_anchor_point(anchor);
-      child_anchor_point = get_child_anchor_point(gravity);
-      auto const saved_origin_dc{std::exchange(
-          origin_dc,
-          calculate_origin(parent_anchor_point, child_anchor_point, offset))};
-      if (is_constrained_along_y()) {
-        origin_dc = saved_origin_dc;
-      }
-    } else if (positioner.constraint_adjustment &
-               static_cast<uint32_t>(flutter::FlutterWindowPositioner::
-                                         ConstraintAdjustment::slide_y)) {
-      // TODO: Slide towards the direction of the gravity first
-      if (origin_dc.y < 0) {
-        auto const diff{abs(origin_dc.y)};
-        offset = {offset.x, offset.y + diff};
-        origin_dc =
-            calculate_origin(parent_anchor_point, child_anchor_point, offset);
-      }
-      if (origin_dc.y + child_size.y > monitor_rect.bottom) {
-        auto const diff{(origin_dc.y + child_size.y) - monitor_rect.bottom};
-        offset = {offset.x, offset.y - diff};
-        origin_dc =
-            calculate_origin(parent_anchor_point, child_anchor_point, offset);
-      }
-    } else if (positioner.constraint_adjustment &
-               static_cast<uint32_t>(flutter::FlutterWindowPositioner::
-                                         ConstraintAdjustment::resize_y)) {
-      if (origin_dc.y < 0) {
-        auto const diff{std::clamp(abs(origin_dc.y), 1.0, child_size.y - 1)};
-        origin_dc.y += diff;
-        child_size.y -= diff;
-      }
-      if (origin_dc.y + child_size.y > monitor_rect.bottom) {
-        auto const diff{
-            std::clamp((origin_dc.y + child_size.y) - monitor_rect.bottom, 1.0,
-                       child_size.y - 1)};
-        child_size.y -= diff;
-      }
-    }
-  }
-
-  flutter::Win32Window::Point const origin_lc{
-      static_cast<unsigned int>(origin_dc.x / dpr),
-      static_cast<unsigned int>(origin_dc.y / dpr)};
-  flutter::Win32Window::Size const new_size{
-      static_cast<unsigned int>(child_size.x / dpr),
-      static_cast<unsigned int>(child_size.y / dpr)};
-  return {origin_lc, new_size};
+  return std::nullopt;
 }
 
-void handleCreateRegularWindow(
-    flutter::MethodCall<> const& call,
-    std::unique_ptr<flutter::MethodResult<>>& result) {
-  auto const* const arguments{call.arguments()};
-  if (auto const* const map{std::get_if<flutter::EncodableMap>(arguments)}) {
-    auto const width_it{map->find(flutter::EncodableValue("width"))};
-    auto const height_it{map->find(flutter::EncodableValue("height"))};
-    if (width_it != map->end() && height_it != map->end()) {
-      auto const* const width{std::get_if<int>(&width_it->second)};
-      auto const* const height{std::get_if<int>(&height_it->second)};
-      if (width && height) {
-        flutter::Win32Window::Size const size{
-            static_cast<unsigned int>(*width),
-            static_cast<unsigned int>(*height)};
-
-        if (auto const data{flutter::FlutterWindowController::instance()
-                                .createRegularWindow(L"regular", size)}) {
-          result->Success(encodeWindowCreationResult(data.value()));
+// Retrieves a list of values associated with |key| from |map|, ensuring the
+// list has |Size| elements, all of type |T|. Returns the list if found and
+// valid, otherwise logs an error in |result| and returns std::nullopt.
+template <typename T, size_t Size>
+auto getListValuesForKeyOrSendError(
+    std::string const& key,
+    flutter::EncodableMap const* map,
+    std::unique_ptr<flutter::MethodResult<>>& result)
+    -> std::optional<std::vector<T>> {
+  if (auto const it{map->find(flutter::EncodableValue(key))};
+      it != map->end()) {
+    if (auto const* const array{
+            std::get_if<std::vector<flutter::EncodableValue>>(&it->second)}) {
+      if (array->size() != Size) {
+        result->Error(kErrorCodeInvalidValue,
+                      "Array for '" + key + "' key must have " +
+                          std::to_string(Size) + " values.");
+        return std::nullopt;
+      }
+      std::vector<T> decoded_values;
+      for (auto const& value : *array) {
+        if (std::holds_alternative<T>(value)) {
+          decoded_values.push_back(std::get<T>(value));
         } else {
-          result->Error("UNAVAILABLE", "Can't create window.");
+          result->Error(kErrorCodeInvalidValue,
+                        "Array for '" + key +
+                            "' key must only have values of type '" +
+                            typeid(T).name() + "'.");
+          return std::nullopt;
         }
-      } else {
-        result->Error("INVALID_VALUE",
-                      "Values for {'width', 'height'} must be of type int.");
       }
+      return decoded_values;
     } else {
-      result->Error(
-          "INVALID_VALUE",
-          "Map does not contain all required keys: {'width', 'height'}.");
+      result->Error(kErrorCodeInvalidValue,
+                    "Value for '" + key + "' key must be an array.");
     }
   } else {
-    result->Error("INVALID_VALUE", "Value argument is not a map.");
+    result->Error(kErrorCodeInvalidValue,
+                  "Map does not contain required '" + key + "' key.");
   }
+  return std::nullopt;
 }
 
-void handleCreateDialogWindow(
-    flutter::MethodCall<> const& call,
-    std::unique_ptr<flutter::MethodResult<>>& result) {
-  auto const* const arguments{call.arguments()};
-  if (auto const* const map{std::get_if<flutter::EncodableMap>(arguments)}) {
-    auto const parent_it{map->find(flutter::EncodableValue("parent"))};
-    auto const size_it{map->find(flutter::EncodableValue("size"))};
-
-    if (parent_it != map->end() && size_it != map->end()) {
-      auto const* const parent{std::get_if<int>(&parent_it->second)};
-      if (!parent) {
-        result->Error("INVALID_VALUE",
-                      "Value for 'parent' must be of type int.");
-        return;
-      }
-
-      auto const* const size_list{
-          std::get_if<std::vector<flutter::EncodableValue>>(&size_it->second)};
-      if (size_list->size() != 2 ||
-          !std::holds_alternative<int>(size_list->at(0)) ||
-          !std::holds_alternative<int>(size_list->at(1))) {
-        result->Error("INVALID_VALUE",
-                      "Values for 'size' must be of type int.");
-        return;
-      }
-      auto const width{std::get<int>(size_list->at(0))};
-      auto const height{std::get<int>(size_list->at(1))};
-      flutter::Win32Window::Size const size{static_cast<unsigned int>(width),
-                                            static_cast<unsigned int>(height)};
-
-      auto const origin{
-          [&size, &parent]() -> std::optional<flutter::Win32Window::Point> {
-            if (parent) {
-              auto const& windows{
-                  flutter::FlutterWindowController::instance().windows()};
-              if (windows.find(*parent) != windows.end()) {
-                return calculateCenteredOrigin(
-                    size, windows.at(*parent)->GetHandle());
-              }
-            }
-            return std::nullopt;
-          }()};
-
-      if (auto const data{
-              flutter::FlutterWindowController::instance().createDialogWindow(
-                  L"dialog", size, origin,
-                  *parent >= 0 ? std::optional<flutter::FlutterViewId>{*parent}
-                               : std::nullopt)}) {
-        result->Success(encodeWindowCreationResult(data.value()));
-      } else {
-        result->Error("UNAVAILABLE", "Can't create window.");
-      }
-    } else {
-      result->Error(
-          "INVALID_VALUE",
-          "Map does not contain all required keys: {'parent', 'size'}.");
-    }
-  } else {
-    result->Error("INVALID_VALUE", "Value argument is not a map.");
+// Converts a |flutter::FlutterWindowArchetype| to its corresponding wide
+// string representation.
+auto archetypeToWideString(flutter::FlutterWindowArchetype archetype)
+    -> std::wstring {
+  switch (archetype) {
+    case flutter::FlutterWindowArchetype::regular:
+      return L"regular";
+    case flutter::FlutterWindowArchetype::floating_regular:
+      return L"floating_regular";
+    case flutter::FlutterWindowArchetype::dialog:
+      return L"dialog";
+    case flutter::FlutterWindowArchetype::satellite:
+      return L"satellite";
+    case flutter::FlutterWindowArchetype::popup:
+      return L"popup";
+    case flutter::FlutterWindowArchetype::tip:
+      return L"tip";
   }
+  std::cerr
+      << "Unhandled window archetype encountered in archetypeToWideString: "
+      << static_cast<int>(archetype) << "\n";
+  std::abort();
 }
 
-void handleCreatePopupWindow(flutter::MethodCall<> const& call,
-                             std::unique_ptr<flutter::MethodResult<>>& result) {
+void handleCreateWindow(flutter::FlutterWindowArchetype archetype,
+                        flutter::MethodCall<> const& call,
+                        std::unique_ptr<flutter::MethodResult<>>& result) {
   auto const* const arguments{call.arguments()};
-  if (auto const* const map{std::get_if<flutter::EncodableMap>(arguments)}) {
-    auto const parent_it{map->find(flutter::EncodableValue("parent"))};
-    auto const size_it{map->find(flutter::EncodableValue("size"))};
-    auto const anchor_rect_it{map->find(flutter::EncodableValue("anchorRect"))};
-    auto const positioner_parent_anchor_it{
-        map->find(flutter::EncodableValue("positionerParentAnchor"))};
-    auto const positioner_child_anchor_it{
-        map->find(flutter::EncodableValue("positionerChildAnchor"))};
-    auto const positioner_offset_it{
-        map->find(flutter::EncodableValue("positionerOffset"))};
-    auto const positioner_constraint_adjustment_it{
-        map->find(flutter::EncodableValue("positionerConstraintAdjustment"))};
+  auto const* const map{std::get_if<flutter::EncodableMap>(arguments)};
+  if (!map) {
+    result->Error(kErrorCodeInvalidValue, "Method call argument is not a map.");
+    return;
+  }
 
-    if (parent_it != map->end() && size_it != map->end() &&
-        anchor_rect_it != map->end() &&
-        positioner_parent_anchor_it != map->end() &&
-        positioner_child_anchor_it != map->end() &&
-        positioner_offset_it != map->end() &&
-        positioner_constraint_adjustment_it != map->end()) {
-      // parent
-      auto const* const parent{std::get_if<int>(&parent_it->second)};
-      if (!parent) {
-        result->Error("INVALID_VALUE",
-                      "Value for 'parent' must be of type int.");
-        return;
-      }
+  std::wstring const title{archetypeToWideString(archetype)};
 
-      // size
-      auto const* const size_list{
-          std::get_if<std::vector<flutter::EncodableValue>>(&size_it->second)};
-      if (size_list->size() != 2 ||
-          !std::holds_alternative<int>(size_list->at(0)) ||
-          !std::holds_alternative<int>(size_list->at(1))) {
-        result->Error("INVALID_VALUE",
-                      "Values for 'size' must be of type int.");
-        return;
-      }
-      auto const width{std::get<int>(size_list->at(0))};
-      auto const height{std::get<int>(size_list->at(1))};
-      flutter::Win32Window::Size const size{static_cast<unsigned int>(width),
-                                            static_cast<unsigned int>(height)};
+  auto const size_list{
+      getListValuesForKeyOrSendError<int, 2>("size", map, result)};
+  if (!size_list) {
+    return;
+  }
+  if (size_list->at(0) < 0 || size_list->at(1) < 0) {
+    result->Error(kErrorCodeInvalidValue,
+                  "Values for 'size' key (" + std::to_string(size_list->at(0)) +
+                      ", " + std::to_string(size_list->at(1)) +
+                      ") must be nonnegative.");
+    return;
+  }
 
-      // anchorRect
-      std::optional<flutter::FlutterWindowPositioner::Rect> anchor_rect;
-      if (auto const* const anchor_rect_list{
-              std::get_if<std::vector<flutter::EncodableValue>>(
-                  &anchor_rect_it->second)}) {
-        if (anchor_rect_list->size() != 4) {
-          result->Error(
-              "INVALID_VALUE",
-              "Values for 'anchorRect' must be an array of 4 integers.");
-          return;
-        } else if (!std::holds_alternative<int>(anchor_rect_list->at(0)) ||
-                   !std::holds_alternative<int>(anchor_rect_list->at(1)) ||
-                   !std::holds_alternative<int>(anchor_rect_list->at(2)) ||
-                   !std::holds_alternative<int>(anchor_rect_list->at(3))) {
-          result->Error("INVALID_VALUE",
-                        "Values for 'anchorRect' must be of type int.");
+  std::optional<flutter::FlutterWindowPositioner> positioner;
+  std::optional<flutter::FlutterWindowPositioner::Rect> anchor_rect;
+
+  if (archetype == flutter::FlutterWindowArchetype::satellite ||
+      archetype == flutter::FlutterWindowArchetype::popup) {
+    if (auto const anchor_rect_it{
+            map->find(flutter::EncodableValue("anchorRect"))};
+        anchor_rect_it != map->end()) {
+      if (!anchor_rect_it->second.IsNull()) {
+        auto const anchor_rect_list{
+            getListValuesForKeyOrSendError<int, 4>("anchorRect", map, result)};
+        if (!anchor_rect_list) {
           return;
         }
         anchor_rect = flutter::FlutterWindowPositioner::Rect{
-            .x = std::get<int>(anchor_rect_list->at(0)),
-            .y = std::get<int>(anchor_rect_list->at(1)),
-            .width = std::get<int>(anchor_rect_list->at(2)),
-            .height = std::get<int>(anchor_rect_list->at(3))};
-      }
-
-      // positionerParentAnchor
-      auto const* const positioner_parent_anchor{
-          std::get_if<int>(&positioner_parent_anchor_it->second)};
-      if (!positioner_parent_anchor) {
-        result->Error(
-            "INVALID_VALUE",
-            "Value for 'positionerParentAnchor' must be of type int.");
-        return;
-      }
-
-      // positionerChildAnchor
-      auto const* const positioner_child_anchor{
-          std::get_if<int>(&positioner_child_anchor_it->second)};
-      if (!positioner_child_anchor) {
-        result->Error("INVALID_VALUE",
-                      "Value for 'positionerChildAnchor' must be of type int.");
-        return;
-      }
-      // Convert from anchor (originally a FlutterWindowPositionerAnchor) to
-      // flutter::FlutterWindowPositioner::Gravity
-      auto const gravity{[](flutter::FlutterWindowPositioner::Anchor anchor)
-                             -> flutter::FlutterWindowPositioner::Gravity {
-        switch (anchor) {
-          case flutter::FlutterWindowPositioner::Anchor::none:
-            return flutter::FlutterWindowPositioner::Gravity::none;
-          case flutter::FlutterWindowPositioner::Anchor::top:
-            return flutter::FlutterWindowPositioner::Gravity::bottom;
-          case flutter::FlutterWindowPositioner::Anchor::bottom:
-            return flutter::FlutterWindowPositioner::Gravity::top;
-          case flutter::FlutterWindowPositioner::Anchor::left:
-            return flutter::FlutterWindowPositioner::Gravity::right;
-          case flutter::FlutterWindowPositioner::Anchor::right:
-            return flutter::FlutterWindowPositioner::Gravity::left;
-          case flutter::FlutterWindowPositioner::Anchor::top_left:
-            return flutter::FlutterWindowPositioner::Gravity::bottom_right;
-          case flutter::FlutterWindowPositioner::Anchor::bottom_left:
-            return flutter::FlutterWindowPositioner::Gravity::top_right;
-          case flutter::FlutterWindowPositioner::Anchor::top_right:
-            return flutter::FlutterWindowPositioner::Gravity::bottom_left;
-          case flutter::FlutterWindowPositioner::Anchor::bottom_right:
-            return flutter::FlutterWindowPositioner::Gravity::top_left;
-          default:
-            return flutter::FlutterWindowPositioner::Gravity::none;
-        }
-      }(static_cast<flutter::FlutterWindowPositioner::Anchor>(
-                                 *positioner_child_anchor))};
-
-      // positionerOffset
-      auto const* const positioner_offset_list{
-          std::get_if<std::vector<flutter::EncodableValue>>(
-              &positioner_offset_it->second)};
-      if (positioner_offset_list->size() != 2 ||
-          !std::holds_alternative<int>(size_list->at(0)) ||
-          !std::holds_alternative<int>(size_list->at(1))) {
-        result->Error("INVALID_VALUE",
-                      "Values for 'positionerOffset' must be of type int.");
-        return;
-      }
-      auto const dx{std::get<int>(positioner_offset_list->at(0))};
-      auto const dy{std::get<int>(positioner_offset_list->at(1))};
-
-      // positionerConstraintAdjustment
-      auto const* const positioner_constraint_adjustment{
-          std::get_if<int>(&positioner_constraint_adjustment_it->second)};
-      if (!positioner_constraint_adjustment) {
-        result->Error(
-            "INVALID_VALUE",
-            "Value for 'positionerConstraintAdjustment' must be of type int.");
-        return;
-      }
-
-      flutter::FlutterWindowPositioner const positioner{
-          .anchor_rect = anchor_rect,
-          .anchor = static_cast<flutter::FlutterWindowPositioner::Anchor>(
-              *positioner_parent_anchor),
-          .gravity = gravity,
-          .offset = {.dx = dx, .dy = dy},
-          .constraint_adjustment =
-              static_cast<uint32_t>(*positioner_constraint_adjustment)};
-
-      auto const& [origin,
-                   new_size]{applyPositioner(positioner, size, *parent)};
-
-      if (auto const data{
-              flutter::FlutterWindowController::instance().createPopupWindow(
-                  L"popup", origin, new_size, *parent)}) {
-        result->Success(encodeWindowCreationResult(data.value()));
-      } else {
-        result->Error("UNAVAILABLE", "Can't create window.");
+            .x = anchor_rect_list->at(0),
+            .y = anchor_rect_list->at(1),
+            .width = anchor_rect_list->at(2),
+            .height = anchor_rect_list->at(3)};
       }
     } else {
-      result->Error("INVALID_VALUE",
-                    "Map does not contain all required keys: "
-                    "{'parent', 'size', 'anchorRect', "
-                    "'positionerParentAnchor', 'positionerChildAnchor', "
-                    "'positionerOffset', 'positionerConstraintAdjustment'}.");
+      result->Error(kErrorCodeInvalidValue,
+                    "Map does not contain required 'anchorRect' key.");
+      return;
     }
+
+    auto const positioner_parent_anchor{getSingleValueForKeyOrSendError<int>(
+        "positionerParentAnchor", map, result)};
+    if (!positioner_parent_anchor) {
+      return;
+    }
+    auto const positioner_child_anchor{getSingleValueForKeyOrSendError<int>(
+        "positionerChildAnchor", map, result)};
+    if (!positioner_child_anchor) {
+      return;
+    }
+
+    auto const gravity{[](flutter::FlutterWindowPositioner::Anchor anchor)
+                           -> flutter::FlutterWindowPositioner::Gravity {
+      // Convert from |FlutterWindowPositioner::Anchor| (originally a
+      // |WindowPositionerAnchor|) to |FlutterWindowPositioner::Gravity|
+      switch (anchor) {
+        case flutter::FlutterWindowPositioner::Anchor::none:
+          return flutter::FlutterWindowPositioner::Gravity::none;
+        case flutter::FlutterWindowPositioner::Anchor::top:
+          return flutter::FlutterWindowPositioner::Gravity::bottom;
+        case flutter::FlutterWindowPositioner::Anchor::bottom:
+          return flutter::FlutterWindowPositioner::Gravity::top;
+        case flutter::FlutterWindowPositioner::Anchor::left:
+          return flutter::FlutterWindowPositioner::Gravity::right;
+        case flutter::FlutterWindowPositioner::Anchor::right:
+          return flutter::FlutterWindowPositioner::Gravity::left;
+        case flutter::FlutterWindowPositioner::Anchor::top_left:
+          return flutter::FlutterWindowPositioner::Gravity::bottom_right;
+        case flutter::FlutterWindowPositioner::Anchor::bottom_left:
+          return flutter::FlutterWindowPositioner::Gravity::top_right;
+        case flutter::FlutterWindowPositioner::Anchor::top_right:
+          return flutter::FlutterWindowPositioner::Gravity::bottom_left;
+        case flutter::FlutterWindowPositioner::Anchor::bottom_right:
+          return flutter::FlutterWindowPositioner::Gravity::top_left;
+      }
+      std::cerr << "Unhandled anchor value: " << static_cast<int>(anchor)
+                << "\n";
+      std::abort();
+    }(static_cast<flutter::FlutterWindowPositioner::Anchor>(
+                               positioner_child_anchor.value()))};
+
+    auto const positioner_offset_list{getListValuesForKeyOrSendError<int, 2>(
+        "positionerOffset", map, result)};
+    if (!positioner_offset_list) {
+      return;
+    }
+    auto const positioner_constraint_adjustment{
+        getSingleValueForKeyOrSendError<int>("positionerConstraintAdjustment",
+                                             map, result)};
+    if (!positioner_constraint_adjustment) {
+      return;
+    }
+    positioner = flutter::FlutterWindowPositioner{
+        .anchor_rect = anchor_rect,
+        .anchor = static_cast<flutter::FlutterWindowPositioner::Anchor>(
+            positioner_parent_anchor.value()),
+        .gravity = gravity,
+        .offset = {.dx = positioner_offset_list->at(0),
+                   .dy = positioner_offset_list->at(1)},
+        .constraint_adjustment =
+            static_cast<uint32_t>(positioner_constraint_adjustment.value())};
+  }
+
+  std::optional<flutter::FlutterViewId> parent_view_id;
+  if (archetype == flutter::FlutterWindowArchetype::dialog ||
+      archetype == flutter::FlutterWindowArchetype::satellite ||
+      archetype == flutter::FlutterWindowArchetype::popup) {
+    if (auto const parent_it{map->find(flutter::EncodableValue("parent"))};
+        parent_it != map->end()) {
+      if (parent_it->second.IsNull()) {
+        if (archetype != flutter::FlutterWindowArchetype::dialog) {
+          result->Error(kErrorCodeInvalidValue,
+                        "Value for 'parent' key must not be null.");
+          return;
+        }
+      } else {
+        if (auto const* const parent{std::get_if<int>(&parent_it->second)}) {
+          parent_view_id = *parent >= 0
+                               ? std::optional<flutter::FlutterViewId>(*parent)
+                               : std::nullopt;
+          if (!parent_view_id.has_value() &&
+              (archetype == flutter::FlutterWindowArchetype::satellite ||
+               archetype == flutter::FlutterWindowArchetype::popup)) {
+            result->Error(kErrorCodeInvalidValue,
+                          "Value for 'parent' key (" +
+                              std::to_string(parent_view_id.value()) +
+                              ") must be nonnegative.");
+            return;
+          }
+        } else {
+          result->Error(kErrorCodeInvalidValue,
+                        "Value for 'parent' key must be of type int.");
+          return;
+        }
+      }
+    } else {
+      result->Error(kErrorCodeInvalidValue,
+                    "Map does not contain required 'parent' key.");
+      return;
+    }
+  }
+
+  if (auto const data_opt{
+          flutter::FlutterWindowController::instance().createWindow(
+              title,
+              {static_cast<unsigned int>(size_list->at(0)),
+               static_cast<unsigned int>(size_list->at(1))},
+              archetype, positioner, parent_view_id)}) {
+    auto const& data{data_opt.value()};
+    result->Success(flutter::EncodableValue(flutter::EncodableMap{
+        {flutter::EncodableValue("viewId"),
+         flutter::EncodableValue(data.view_id)},
+        {flutter::EncodableValue("parentViewId"),
+         data.parent_id ? flutter::EncodableValue(data.parent_id.value())
+                        : flutter::EncodableValue()},
+        {flutter::EncodableValue("archetype"),
+         flutter::EncodableValue(static_cast<int>(data.archetype))},
+        {flutter::EncodableValue("width"),
+         flutter::EncodableValue(data.size.width)},
+        {flutter::EncodableValue("height"),
+         flutter::EncodableValue((data.size.height))}}));
   } else {
-    result->Error("INVALID_VALUE", "Value argument is not a map.");
+    result->Error(kErrorCodeUnavailable, "Can't create window.");
   }
 }
 
 void handleDestroyWindow(flutter::MethodCall<> const& call,
                          std::unique_ptr<flutter::MethodResult<>>& result) {
-  auto const arguments{
-      std::get<std::vector<flutter::EncodableValue>>(*call.arguments())};
-  if (arguments.size() != 1 || !std::holds_alternative<int>(arguments[0])) {
-    result->Error("INVALID_VALUE", "Value argument is not valid.");
-  } else {
-    auto const view_id{std::get<int>(arguments[0])};
-    if (flutter::FlutterWindowController::instance().destroyWindow(view_id,
-                                                                   true)) {
-      result->Success();
-    } else {
-      result->Error("UNAVAILABLE", "Can't destroy window.");
-    }
+  auto const* const arguments{call.arguments()};
+  auto const* const map{std::get_if<flutter::EncodableMap>(arguments)};
+  if (!map) {
+    result->Error(kErrorCodeInvalidValue, "Method call argument is not a map.");
+    return;
   }
+
+  auto const view_id{
+      getSingleValueForKeyOrSendError<int>("viewId", map, result)};
+  if (!view_id) {
+    return;
+  }
+  if (view_id.value() < 0) {
+    result->Error(kErrorCodeInvalidValue, "Value for 'viewId' (" +
+                                              std::to_string(view_id.value()) +
+                                              ") must be nonnegative.");
+    return;
+  }
+
+  if (flutter::FlutterWindowController::instance().destroyWindow(
+          view_id.value(), true)) {
+    result->Success();
+  } else {
+    result->Error(kErrorCodeUnavailable, "Can't destroy window.");
+  }
+}
+
+auto getParentOrOwner(HWND window) -> HWND {
+  auto const parent{GetParent(window)};
+  return parent ? parent : GetWindow(window, GW_OWNER);
 }
 
 }  // namespace
@@ -681,11 +328,13 @@ void FlutterWindowController::initializeChannel() {
         [this](MethodCall<> const& call,
                std::unique_ptr<MethodResult<>> result) {
           if (call.method_name() == "createRegularWindow") {
-            handleCreateRegularWindow(call, result);
+            handleCreateWindow(FlutterWindowArchetype::regular, call, result);
           } else if (call.method_name() == "createDialogWindow") {
-            handleCreateDialogWindow(call, result);
+            handleCreateWindow(FlutterWindowArchetype::dialog, call, result);
+          } else if (call.method_name() == "createSatelliteWindow") {
+            handleCreateWindow(FlutterWindowArchetype::satellite, call, result);
           } else if (call.method_name() == "createPopupWindow") {
-            handleCreatePopupWindow(call, result);
+            handleCreateWindow(FlutterWindowArchetype::popup, call, result);
           } else if (call.method_name() == "destroyWindow") {
             handleDestroyWindow(call, result);
           } else {
@@ -701,19 +350,29 @@ void FlutterWindowController::setEngine(std::shared_ptr<FlutterEngine> engine) {
   initializeChannel();
 }
 
-auto FlutterWindowController::createRegularWindow(std::wstring const& title,
-                                                  Win32Window::Size const& size)
+auto FlutterWindowController::createWindow(
+    std::wstring const& title,
+    Win32Window::Size const& size,
+    FlutterWindowArchetype archetype,
+    std::optional<FlutterWindowPositioner> positioner,
+    std::optional<FlutterViewId> parent_view_id)
     -> std::optional<FlutterWindowCreationResult> {
   std::unique_lock lock(mutex_);
   if (!engine_) {
-    std::cerr << "Cannot create regular window without an engine.\n";
+    std::cerr << "Cannot create window without an engine.\n";
     return std::nullopt;
   }
+
   auto window{std::make_unique<FlutterWin32Window>(engine_)};
 
+  std::optional<HWND> const parent_hwnd{
+      parent_view_id.has_value() &&
+              windows_.find(parent_view_id.value()) != windows_.end()
+          ? std::optional<HWND>{windows_[parent_view_id.value()]->GetHandle()}
+          : std::nullopt};
+
   lock.unlock();
-  if (!window->Create(title, size, FlutterWindowArchetype::regular,
-                      std::nullopt, std::nullopt)) {
+  if (!window->Create(title, size, archetype, parent_hwnd, positioner)) {
     return std::nullopt;
   }
   lock.lock();
@@ -727,102 +386,11 @@ auto FlutterWindowController::createRegularWindow(std::wstring const& title,
   windows_[view_id] = std::move(window);
 
   cleanupClosedWindows();
-  sendOnWindowCreated(FlutterWindowArchetype::regular, view_id, std::nullopt);
-
-  FlutterWindowCreationResult result{
-      .view_id = view_id,
-      .archetype = FlutterWindowArchetype::regular,
-      .size = getWindowSize(view_id)};
-
-  lock.unlock();
-
-  sendOnWindowResized(view_id);
-
-  return result;
-}
-
-auto FlutterWindowController::createDialogWindow(
-    std::wstring const& title,
-    Win32Window::Size const& size,
-    std::optional<Win32Window::Point> origin,
-    std::optional<FlutterViewId> parent_view_id)
-    -> std::optional<FlutterWindowCreationResult> {
-  std::unique_lock lock(mutex_);
-  if (!engine_) {
-    std::cerr << "Cannot create dialog without an engine.\n";
-    return std::nullopt;
-  }
-
-  std::optional<HWND> const parent_hwnd{
-      parent_view_id && windows_.find(*parent_view_id) != windows_.end()
-          ? std::optional<HWND>{windows_[*parent_view_id].get()->GetHandle()}
-          : std::nullopt};
-  auto window{std::make_unique<FlutterWin32Window>(engine_)};
-
-  lock.unlock();
-  if (!window->Create(title, size, FlutterWindowArchetype::dialog, origin,
-                      parent_hwnd)) {
-    return std::nullopt;
-  }
-  lock.lock();
-
-  auto const view_id{window->flutter_controller()->view_id()};
-  windows_[view_id] = std::move(window);
-
-  cleanupClosedWindows();
-  sendOnWindowCreated(FlutterWindowArchetype::dialog, view_id, parent_view_id);
-
-  FlutterWindowCreationResult result{
-      .view_id = view_id,
-      .parent_id = parent_view_id,
-      .archetype = FlutterWindowArchetype::dialog,
-      .size = getWindowSize(view_id)};
-
-  lock.unlock();
-
-  sendOnWindowResized(view_id);
-
-  return result;
-}
-
-auto FlutterWindowController::createPopupWindow(
-    std::wstring const& title,
-    Win32Window::Point const& origin,
-    Win32Window::Size const& size,
-    std::optional<FlutterViewId> parent_view_id)
-    -> std::optional<FlutterWindowCreationResult> {
-  std::unique_lock lock(mutex_);
-  if (!engine_) {
-    std::cerr << "Cannot create popup without an engine.\n";
-    return std::nullopt;
-  }
-
-  auto* const parent_hwnd{parent_view_id && windows_.find(*parent_view_id) !=
-                                                windows_.end()
-                              ? windows_[*parent_view_id].get()->GetHandle()
-                              : nullptr};
-  if (!parent_hwnd) {
-    std::cerr << "Cannot create popup without a parent window.\n";
-    return std::nullopt;
-  }
-  auto window{std::make_unique<FlutterWin32Window>(engine_)};
-
-  lock.unlock();
-  if (!window->Create(title, size, FlutterWindowArchetype::popup, origin,
-                      parent_hwnd)) {
-    return std::nullopt;
-  }
-  lock.lock();
-
-  auto const view_id{window->flutter_controller()->view_id()};
-  windows_[view_id] = std::move(window);
-
-  cleanupClosedWindows();
-  sendOnWindowCreated(FlutterWindowArchetype::popup, view_id, parent_view_id);
+  sendOnWindowCreated(archetype, view_id, parent_view_id);
 
   FlutterWindowCreationResult result{.view_id = view_id,
                                      .parent_id = parent_view_id,
-                                     .archetype = FlutterWindowArchetype::popup,
+                                     .archetype = archetype,
                                      .size = getWindowSize(view_id)};
 
   lock.unlock();
@@ -841,7 +409,7 @@ auto FlutterWindowController::destroyWindow(FlutterViewId view_id,
       for (auto& [id, window] : windows_) {
         if (id != view_id && window->flutter_controller()) {
           lock.unlock();
-          window->Destroy();
+          DestroyWindow(window->GetHandle());
           lock.lock();
         }
       }
@@ -849,10 +417,20 @@ auto FlutterWindowController::destroyWindow(FlutterViewId view_id,
     if (destroy_native_window) {
       auto const& window{windows_[view_id]};
       lock.unlock();
-      window->Destroy();
+      if (window->archetype_ == FlutterWindowArchetype::dialog &&
+          GetWindow(window->GetHandle(), GW_OWNER)) {
+        // Temporarily disable satellite hiding. This prevents satellites from
+        // flickering because of briefly hiding and showing between the
+        // destruction of a modal dialog and the transfer of focus to the owner
+        // window.
+        g_enable_satellite_hiding = false;
+      }
+      DestroyWindow(window->GetHandle());
+      g_enable_satellite_hiding = true;
       lock.lock();
+    } else {
+      sendOnWindowDestroyed(view_id);
     }
-    sendOnWindowDestroyed(view_id);
     return true;
   }
   return false;
@@ -891,13 +469,13 @@ void FlutterWindowController::sendOnWindowCreated(
   if (channel_) {
     channel_->InvokeMethod(
         "onWindowCreated",
-        std::make_unique<EncodableValue>(
-            EncodableMap{{EncodableValue("viewId"), EncodableValue(view_id)},
-                         {EncodableValue("parentViewId"),
-                          parent_view_id ? EncodableValue(*parent_view_id)
-                                         : EncodableValue()},
-                         {EncodableValue("archetype"),
-                          EncodableValue(static_cast<int>(archetype))}}));
+        std::make_unique<EncodableValue>(EncodableMap{
+            {EncodableValue("viewId"), EncodableValue(view_id)},
+            {EncodableValue("parentViewId"),
+             parent_view_id ? EncodableValue(parent_view_id.value())
+                            : EncodableValue()},
+            {EncodableValue("archetype"),
+             EncodableValue(static_cast<int>(archetype))}}));
   }
 }
 
@@ -935,7 +513,8 @@ FlutterWindowSize FlutterWindowController::getWindowSize(
   }
 
   // Convert to logical coordinates
-  auto const dpr{FlutterDesktopGetDpiForHWND(hwnd) / kBaseDpi};
+  auto const dpr{FlutterDesktopGetDpiForHWND(hwnd) /
+                 static_cast<double>(USER_DEFAULT_SCREEN_DPI)};
   frame.left = static_cast<LONG>(frame.left / dpr);
   frame.top = static_cast<LONG>(frame.top / dpr);
   frame.right = static_cast<LONG>(frame.right / dpr);
@@ -944,6 +523,74 @@ FlutterWindowSize FlutterWindowController::getWindowSize(
   auto const width{frame.right - frame.left};
   auto const height{frame.bottom - frame.top};
   return {static_cast<int>(width), static_cast<int>(height)};
+}
+
+void FlutterWindowController::hideWindowsSatellites(HWND opt_out_window) {
+  if (!g_enable_satellite_hiding) {
+    return;
+  }
+
+  // Helper function to check whether |window| is a descendant of |ancestor|.
+  auto const is_descendant_of{[](HWND window, HWND ancestor) -> bool {
+    auto current{ancestor};
+    while (current) {
+      current = getParentOrOwner(current);
+      if (current == window) {
+        return true;
+      }
+    }
+    return false;
+  }};
+
+  // Helper function to check whether |window| has a child dialog.
+  auto const has_dialog{[](Win32Window* window) -> bool {
+    for (auto* const child : window->children_) {
+      if (child->archetype_ == FlutterWindowArchetype::dialog) {
+        return true;
+      }
+    }
+    return false;
+  }};
+
+  std::lock_guard const lock(mutex_);
+  for (auto const& [_, window] : windows_) {
+    if (window->window_handle_ == opt_out_window ||
+        is_descendant_of(window->window_handle_, opt_out_window)) {
+      continue;
+    }
+
+    for (auto* const child : window->children_) {
+      if (child->archetype_ != FlutterWindowArchetype::satellite) {
+        continue;
+      }
+      if (!has_dialog(child)) {
+        ShowWindow(child->window_handle_, SW_HIDE);
+      }
+    }
+  }
+}
+
+void FlutterWindowController::showWindowAndAncestorsSatellites(HWND window) {
+  if (!g_enable_satellite_hiding) {
+    return;
+  }
+
+  auto current{window};
+  while (current) {
+    for (auto* const child :
+         Win32Window::GetThisFromHandle(current)->children_) {
+      if (child->archetype_ == FlutterWindowArchetype::satellite) {
+        ShowWindow(child->window_handle_, SW_SHOWNOACTIVATE);
+      }
+    }
+    current = getParentOrOwner(current);
+  }
+
+  // Hide satellites of all other top-level windows
+  if (Win32Window::GetThisFromHandle(window)->archetype_ !=
+      FlutterWindowArchetype::satellite) {
+    hideWindowsSatellites(window);
+  }
 }
 
 }  // namespace flutter
