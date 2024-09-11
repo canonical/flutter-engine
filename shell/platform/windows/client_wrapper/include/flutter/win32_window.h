@@ -1,6 +1,8 @@
 #ifndef FLUTTER_SHELL_PLATFORM_WINDOWS_CLIENT_WRAPPER_INCLUDE_FLUTTER_WIN32_WINDOW_H_
 #define FLUTTER_SHELL_PLATFORM_WINDOWS_CLIENT_WRAPPER_INCLUDE_FLUTTER_WIN32_WINDOW_H_
 
+#include "flutter_window_types.h"
+
 #include <windows.h>
 
 #include <optional>
@@ -9,92 +11,11 @@
 
 namespace flutter {
 
-enum class FlutterWindowArchetype {
-  regular,
-  floating_regular,
-  dialog,
-  satellite,
-  popup,
-  tip
-};
-
-struct FlutterWindowPositioner {
-  struct Size {
-    int32_t width;
-    int32_t height;
-  };
-
-  struct Rect {
-    int32_t x;
-    int32_t y;
-    int32_t width;
-    int32_t height;
-  };
-
-  struct Offset {
-    int32_t dx;
-    int32_t dy;
-  };
-
-  enum class Anchor {
-    none,
-    top,
-    bottom,
-    left,
-    right,
-    top_left,
-    bottom_left,
-    top_right,
-    bottom_right
-  };
-
-  enum class Gravity {
-    none,
-    top,
-    bottom,
-    left,
-    right,
-    top_left,
-    bottom_left,
-    top_right,
-    bottom_right
-  };
-
-  enum class ConstraintAdjustment {
-    none = 0,
-    slide_x = 1,
-    slide_y = 2,
-    flip_x = 4,
-    flip_y = 8,
-    resize_x = 16,
-    resize_y = 32
-  };
-
-  std::optional<Rect> anchor_rect;
-  Anchor anchor;
-  Gravity gravity;
-  Offset offset;
-  uint32_t constraint_adjustment;
-};
-
 // A class abstraction for a high DPI-aware Win32 Window. Intended to be
 // inherited from by classes that wish to specialize with custom
 // rendering and input handling.
 class Win32Window {
  public:
-  struct Point {
-    unsigned int x;
-    unsigned int y;
-    Point(unsigned int x, unsigned int y) : x(x), y(y) {}
-  };
-
-  struct Size {
-    unsigned int width;
-    unsigned int height;
-    Size(unsigned int width, unsigned int height)
-        : width(width), height(height) {}
-  };
-
   Win32Window();
   virtual ~Win32Window();
 
@@ -106,7 +27,7 @@ class Win32Window {
   // is created if |parent| is specified; otherwise, the dialog is modeless.
   // After creation, |OnCreate| is called and its result is returned.
   auto Create(std::wstring const& title,
-              Size const& client_size,
+              FlutterWindowSize const& client_size,
               FlutterWindowArchetype archetype,
               std::optional<HWND> parent,
               std::optional<FlutterWindowPositioner> positioner) -> bool;

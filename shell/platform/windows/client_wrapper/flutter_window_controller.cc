@@ -6,6 +6,7 @@
 #include <dwmapi.h>
 
 namespace {
+
 auto const* const kChannel{"flutter/windowing"};
 auto const* const kErrorCodeInvalidValue{"INVALID_VALUE"};
 auto const* const kErrorCodeUnavailable{"UNAVAILABLE"};
@@ -131,7 +132,7 @@ void handleCreateWindow(flutter::FlutterWindowArchetype archetype,
   }
 
   std::optional<flutter::FlutterWindowPositioner> positioner;
-  std::optional<flutter::FlutterWindowPositioner::Rect> anchor_rect;
+  std::optional<flutter::FlutterWindowRectangle> anchor_rect;
 
   if (archetype == flutter::FlutterWindowArchetype::satellite ||
       archetype == flutter::FlutterWindowArchetype::popup) {
@@ -144,11 +145,10 @@ void handleCreateWindow(flutter::FlutterWindowArchetype archetype,
         if (!anchor_rect_list) {
           return;
         }
-        anchor_rect = flutter::FlutterWindowPositioner::Rect{
-            .x = anchor_rect_list->at(0),
-            .y = anchor_rect_list->at(1),
-            .width = anchor_rect_list->at(2),
-            .height = anchor_rect_list->at(3)};
+        anchor_rect = flutter::FlutterWindowRectangle{
+            {.x = anchor_rect_list->at(0), .y = anchor_rect_list->at(1)},
+            {.width = anchor_rect_list->at(2),
+             .height = anchor_rect_list->at(3)}};
       }
     } else {
       result->Error(kErrorCodeInvalidValue,
@@ -166,36 +166,9 @@ void handleCreateWindow(flutter::FlutterWindowArchetype archetype,
     if (!positioner_child_anchor) {
       return;
     }
-
-    auto const gravity{[](flutter::FlutterWindowPositioner::Anchor anchor)
-                           -> flutter::FlutterWindowPositioner::Gravity {
-      // Convert from |FlutterWindowPositioner::Anchor| (originally a
-      // |WindowPositionerAnchor|) to |FlutterWindowPositioner::Gravity|
-      switch (anchor) {
-        case flutter::FlutterWindowPositioner::Anchor::none:
-          return flutter::FlutterWindowPositioner::Gravity::none;
-        case flutter::FlutterWindowPositioner::Anchor::top:
-          return flutter::FlutterWindowPositioner::Gravity::bottom;
-        case flutter::FlutterWindowPositioner::Anchor::bottom:
-          return flutter::FlutterWindowPositioner::Gravity::top;
-        case flutter::FlutterWindowPositioner::Anchor::left:
-          return flutter::FlutterWindowPositioner::Gravity::right;
-        case flutter::FlutterWindowPositioner::Anchor::right:
-          return flutter::FlutterWindowPositioner::Gravity::left;
-        case flutter::FlutterWindowPositioner::Anchor::top_left:
-          return flutter::FlutterWindowPositioner::Gravity::bottom_right;
-        case flutter::FlutterWindowPositioner::Anchor::bottom_left:
-          return flutter::FlutterWindowPositioner::Gravity::top_right;
-        case flutter::FlutterWindowPositioner::Anchor::top_right:
-          return flutter::FlutterWindowPositioner::Gravity::bottom_left;
-        case flutter::FlutterWindowPositioner::Anchor::bottom_right:
-          return flutter::FlutterWindowPositioner::Gravity::top_left;
-      }
-      std::cerr << "Unhandled anchor value: " << static_cast<int>(anchor)
-                << "\n";
-      std::abort();
-    }(static_cast<flutter::FlutterWindowPositioner::Anchor>(
-                               positioner_child_anchor.value()))};
+    auto const child_anchor{
+        static_cast<flutter::FlutterWindowPositioner::Anchor>(
+            positioner_child_anchor.value())};
 
     auto const positioner_offset_list{getListValuesForKeyOrSendError<int, 2>(
         "positionerOffset", map, result)};
@@ -210,13 +183,14 @@ void handleCreateWindow(flutter::FlutterWindowArchetype archetype,
     }
     positioner = flutter::FlutterWindowPositioner{
         .anchor_rect = anchor_rect,
-        .anchor = static_cast<flutter::FlutterWindowPositioner::Anchor>(
+        .parent_anchor = static_cast<flutter::FlutterWindowPositioner::Anchor>(
             positioner_parent_anchor.value()),
-        .gravity = gravity,
-        .offset = {.dx = positioner_offset_list->at(0),
-                   .dy = positioner_offset_list->at(1)},
+        .child_anchor = child_anchor,
+        .offset = {.x = positioner_offset_list->at(0),
+                   .y = positioner_offset_list->at(1)},
         .constraint_adjustment =
-            static_cast<uint32_t>(positioner_constraint_adjustment.value())};
+            static_cast<flutter::FlutterWindowPositioner::ConstraintAdjustment>(
+                positioner_constraint_adjustment.value())};
   }
 
   std::optional<flutter::FlutterViewId> parent_view_id;
@@ -260,9 +234,7 @@ void handleCreateWindow(flutter::FlutterWindowArchetype archetype,
 
   if (auto const data_opt{
           flutter::FlutterWindowController::instance().createWindow(
-              title,
-              {static_cast<unsigned int>(size_list->at(0)),
-               static_cast<unsigned int>(size_list->at(1))},
+              title, {.width = size_list->at(0), .height = size_list->at(1)},
               archetype, positioner, parent_view_id)}) {
     auto const& data{data_opt.value()};
     result->Success(flutter::EncodableValue(flutter::EncodableMap{
@@ -352,7 +324,7 @@ void FlutterWindowController::setEngine(std::shared_ptr<FlutterEngine> engine) {
 
 auto FlutterWindowController::createWindow(
     std::wstring const& title,
-    Win32Window::Size const& size,
+    FlutterWindowSize const& size,
     FlutterWindowArchetype archetype,
     std::optional<FlutterWindowPositioner> positioner,
     std::optional<FlutterViewId> parent_view_id)
