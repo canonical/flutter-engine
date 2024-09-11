@@ -6,23 +6,11 @@
 #include <mutex>
 
 #include "flutter_engine.h"
-#include "flutter_view.h"
 #include "flutter_win32_window.h"
+#include "flutter_window_types.h"
 #include "method_channel.h"
 
 namespace flutter {
-
-struct FlutterWindowSize {
-  int width = 0;
-  int height = 0;
-};
-
-struct FlutterWindowCreationResult {
-  FlutterViewId view_id;
-  std::optional<FlutterViewId> parent_id = std::nullopt;
-  FlutterWindowArchetype archetype;
-  FlutterWindowSize size;
-};
 
 // A singleton controller for Flutter windows.
 class FlutterWindowController {
@@ -45,7 +33,7 @@ class FlutterWindowController {
 
   void setEngine(std::shared_ptr<FlutterEngine> engine);
   auto createWindow(std::wstring const& title,
-                    Win32Window::Size const& size,
+                    FlutterWindowSize const& size,
                     FlutterWindowArchetype archetype,
                     std::optional<FlutterWindowPositioner> positioner,
                     std::optional<FlutterViewId> parent_view_id)
