@@ -124,10 +124,10 @@ void handleCreateWindow(flutter::FlutterWindowArchetype archetype,
     return;
   }
   if (size_list->at(0) < 0 || size_list->at(1) < 0) {
-    result->Error(
-        kErrorCodeInvalidValue,
-        "Values for 'size' key ({" + std::to_string(size_list->at(0)) + ", " +
-            std::to_string(size_list->at(1)) + "}) must be nonnegative.");
+    result->Error(kErrorCodeInvalidValue,
+                  "Values for 'size' key (" + std::to_string(size_list->at(0)) +
+                      ", " + std::to_string(size_list->at(1)) +
+                      ") must be nonnegative.");
     return;
   }
 
