@@ -1,7 +1,7 @@
 #ifndef FLUTTER_SHELL_PLATFORM_WINDOWS_CLIENT_WRAPPER_INCLUDE_FLUTTER_WIN32_WINDOW_H_
 #define FLUTTER_SHELL_PLATFORM_WINDOWS_CLIENT_WRAPPER_INCLUDE_FLUTTER_WIN32_WINDOW_H_
 
-#include "flutter_window_types.h"
+#include "windowing.h"
 
 #include <windows.h>
 
@@ -11,22 +11,31 @@
 
 namespace flutter {
 
+class FlutterWindowController;
+
 // A class abstraction for a high DPI-aware Win32 Window. Intended to be
 // inherited from by classes that wish to specialize with custom
 // rendering and input handling.
 class Win32Window {
  public:
-  Win32Window();
+  explicit Win32Window(FlutterWindowController* window_controller);
   virtual ~Win32Window();
 
-  // Creates a Win32 window with the specified |title| and |client_size|. The
-  // window style is determined by |archetype|. For
+ protected:
+  // Creates a native Win32 window. |window_class| is the window class to
+  // be registered for this window. If a window class with the same name as
+  // |window_class| is already registered, it will be unregistered before
+  // registering the new class. |title| is the window title string.
+  // |client_size| specifies the requested size of the client rectangle (i.e.,
+  // the size of the view). The window style is determined by |archetype|. For
   // |FlutterWindowArchetype::satellite| and |FlutterWindowArchetype::popup|,
   // both |parent| and |positioner| must be provided; |positioner| is used only
   // for these archetypes. For |FlutterWindowArchetype::dialog|, a modal dialog
   // is created if |parent| is specified; otherwise, the dialog is modeless.
-  // After creation, |OnCreate| is called and its result is returned.
-  auto Create(std::wstring const& title,
+  // After successful creation, |OnCreate| is called, and its result is
+  // returned. Otherwise, the return value is false.
+  auto Create(WNDCLASSEX const& window_class,
+              std::wstring const& title,
               FlutterWindowSize const& client_size,
               FlutterWindowArchetype archetype,
               std::optional<HWND> parent,
@@ -40,16 +49,15 @@ class Win32Window {
 
   // Returns the backing window handle to enable clients to set icon and other
   // window properties. Returns nullptr if the window has been destroyed.
-  auto GetHandle() -> HWND;
+  auto GetHandle() const -> HWND;
 
   // If true, closing this window will quit the application.
   void SetQuitOnClose(bool quit_on_close);
   auto GetQuitOnClose() const -> bool;
 
   // Returns the bounds of the current client area.
-  auto GetClientArea() -> RECT;
+  auto GetClientArea() const -> RECT;
 
- protected:
   // Processes and route salient window messages for mouse handling,
   // size change and DPI. Delegates handling of these to member overloads that
   // inheriting classes can handle.
@@ -65,8 +73,10 @@ class Win32Window {
   // Called when Destroy is called.
   virtual void OnDestroy();
 
+  // The controller this window is controlled by.
+  FlutterWindowController* window_controller_;
+
  private:
-  friend class WindowClassRegistrar;
   friend class FlutterWindowController;
 
   // OS callback called by message pump. Handles the WM_NCCREATE message which
@@ -74,13 +84,13 @@ class Win32Window {
   // non-client DPI scaling so that the non-client area automatically
   // responds to changes in DPI. All other messages are handled by
   // MessageHandler.
-  static auto CALLBACK WndProc(HWND window,
+  static auto CALLBACK WndProc(HWND hwnd,
                                UINT message,
                                WPARAM wparam,
                                LPARAM lparam) -> LRESULT;
 
-  // Retrieves a class instance pointer for |window|.
-  static auto GetThisFromHandle(HWND window) noexcept -> Win32Window*;
+  // Retrieves a class instance pointer for |hwnd|.
+  static auto GetThisFromHandle(HWND hwnd) -> Win32Window*;
 
   // The window's archetype (e.g., regular, dialog, popup).
   FlutterWindowArchetype archetype_{FlutterWindowArchetype::regular};

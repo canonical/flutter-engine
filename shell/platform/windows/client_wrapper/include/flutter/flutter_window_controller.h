@@ -1,73 +1,63 @@
 #ifndef FLUTTER_SHELL_PLATFORM_WINDOWS_CLIENT_WRAPPER_INCLUDE_FLUTTER_FLUTTER_WINDOW_CONTROLLER_H_
 #define FLUTTER_SHELL_PLATFORM_WINDOWS_CLIENT_WRAPPER_INCLUDE_FLUTTER_FLUTTER_WINDOW_CONTROLLER_H_
 
-#include <flutter_windows.h>
-
 #include <mutex>
 
 #include "flutter_engine.h"
-#include "flutter_win32_window.h"
-#include "flutter_window_types.h"
 #include "method_channel.h"
+#include "windowing.h"
 
 namespace flutter {
 
-// A singleton controller for Flutter windows.
 class FlutterWindowController {
  public:
+  explicit FlutterWindowController(std::shared_ptr<FlutterEngine> engine);
   ~FlutterWindowController() = default;
 
-  // Prevent copying and moving.
+  // Prevent copying.
   FlutterWindowController(FlutterWindowController const&) = delete;
-  FlutterWindowController(FlutterWindowController&&) = delete;
   FlutterWindowController& operator=(FlutterWindowController const&) = delete;
-  FlutterWindowController& operator=(FlutterWindowController&&) = delete;
 
-  using ViewWindowMap =
-      std::unordered_map<FlutterViewId, std::unique_ptr<FlutterWin32Window>>;
-
-  static FlutterWindowController& instance() {
-    static FlutterWindowController instance;
-    return instance;
-  }
-
-  void setEngine(std::shared_ptr<FlutterEngine> engine);
-  auto createWindow(std::wstring const& title,
-                    FlutterWindowSize const& size,
-                    FlutterWindowArchetype archetype,
-                    std::optional<FlutterWindowPositioner> positioner,
-                    std::optional<FlutterViewId> parent_view_id)
+  auto CreateFlutterWindow(std::wstring const& title,
+                           FlutterWindowSize const& size,
+                           FlutterWindowArchetype archetype,
+                           std::optional<FlutterWindowPositioner> positioner,
+                           std::optional<FlutterViewId> parent_view_id)
       -> std::optional<FlutterWindowCreationResult>;
-  auto destroyWindow(FlutterViewId view_id, bool destroy_native_window) -> bool;
-  auto windows() const -> ViewWindowMap const&;
-  auto channel() const -> std::unique_ptr<MethodChannel<>> const&;
+  auto DestroyFlutterWindow(FlutterViewId view_id) -> bool;
 
  private:
-  friend class FlutterWin32Window;
   friend class Win32Window;
 
-  FlutterWindowController() = default;
-
-  void initializeChannel();
-  void sendOnWindowCreated(FlutterWindowArchetype archetype,
+  auto MessageHandler(HWND hwnd,
+                      UINT message,
+                      WPARAM wparam,
+                      LPARAM lparam) -> LRESULT;
+  void InitializeChannel(BinaryMessenger* messenger);
+  void HandleCreateWindow(FlutterWindowArchetype archetype,
+                          MethodCall<> const& call,
+                          std::unique_ptr<MethodResult<>>& result);
+  void HandleDestroyWindow(flutter::MethodCall<> const& call,
+                           std::unique_ptr<flutter::MethodResult<>>& result);
+  void SendOnWindowCreated(FlutterWindowArchetype archetype,
                            FlutterViewId view_id,
                            std::optional<FlutterViewId> parent_view_id) const;
-  void sendOnWindowDestroyed(FlutterViewId view_id) const;
-  void sendOnWindowResized(FlutterViewId view_id) const;
-  void cleanupClosedWindows();
-  FlutterWindowSize getWindowSize(flutter::FlutterViewId view_id) const;
+  void SendOnWindowDestroyed(FlutterViewId view_id) const;
+  void SendOnWindowResized(FlutterViewId view_id) const;
+  auto GetWindowSize(FlutterViewId view_id) const -> FlutterWindowSize;
+  auto RegisterWindowClass(std::wstring const& window_class_name) const -> bool;
 
   // Hides all satellite windows in the application, except those that are
-  // descendants of |opt_out_window| or have a dialog as a child. By default,
-  // |opt_out_window| is null, so no window is excluded.
-  void hideWindowsSatellites(HWND opt_out_window = nullptr);
-  // Shows the satellite windows of |window| and of its ancestors.
-  void showWindowAndAncestorsSatellites(HWND window);
+  // descendants of |opt_out_hwnd| or have a dialog as a child. By default,
+  // |opt_out_hwnd| is null, so no window is excluded.
+  void HideWindowsSatellites(HWND opt_out_hwnd = nullptr);
+  // Shows the satellite windows of |hwnd| and of its ancestors.
+  void ShowWindowAndAncestorsSatellites(HWND hwnd);
 
   mutable std::mutex mutex_;
   std::unique_ptr<MethodChannel<>> channel_;
   std::shared_ptr<FlutterEngine> engine_;
-  ViewWindowMap windows_;
+  std::unordered_map<FlutterViewId, std::shared_ptr<Win32Window>> windows_;
 };
 
 }  // namespace flutter
