@@ -19,13 +19,11 @@ class FlutterWindowController;
 class Win32Window {
  public:
   explicit Win32Window(FlutterWindowController* window_controller);
-  virtual ~Win32Window();
+  virtual ~Win32Window() = default;
 
  protected:
-  // Creates a native Win32 window. |window_class| is the window class to
-  // be registered for this window. If a window class with the same name as
-  // |window_class| is already registered, it will be unregistered before
-  // registering the new class. |title| is the window title string.
+  // Creates a native Win32 window. |class_name| is the name of the window class
+  // registered for this window. |title| is the window title string.
   // |client_size| specifies the requested size of the client rectangle (i.e.,
   // the size of the view). The window style is determined by |archetype|. For
   // |FlutterWindowArchetype::satellite| and |FlutterWindowArchetype::popup|,
@@ -34,7 +32,7 @@ class Win32Window {
   // is created if |parent| is specified; otherwise, the dialog is modeless.
   // After successful creation, |OnCreate| is called, and its result is
   // returned. Otherwise, the return value is false.
-  auto Create(WNDCLASSEX const& window_class,
+  auto Create(LPCWSTR class_name,
               std::wstring const& title,
               FlutterWindowSize const& client_size,
               WindowArchetype archetype,

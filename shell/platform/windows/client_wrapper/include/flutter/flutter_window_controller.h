@@ -12,7 +12,7 @@ namespace flutter {
 class FlutterWindowController {
  public:
   explicit FlutterWindowController(std::shared_ptr<FlutterEngine> engine);
-  ~FlutterWindowController() = default;
+  ~FlutterWindowController();
 
   // Prevent copying.
   FlutterWindowController(FlutterWindowController const&) = delete;
@@ -45,7 +45,6 @@ class FlutterWindowController {
   void SendOnWindowDestroyed(FlutterViewId view_id) const;
   void SendOnWindowResized(FlutterViewId view_id) const;
   auto GetWindowSize(FlutterViewId view_id) const -> FlutterWindowSize;
-  auto RegisterWindowClass(std::wstring const& window_class_name) const -> bool;
 
   // Hides all satellite windows in the application, except those that are
   // descendants of |opt_out_hwnd| or have a dialog as a child. By default,

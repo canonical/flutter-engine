@@ -12,7 +12,7 @@
 namespace {
 
 auto const* const kChannel{"flutter/windowing"};
-auto const* const kWindowClassPrefix{L"FLUTTER_WIN32_WINDOW"};
+auto const* const kWindowClassName{L"FLUTTER_WIN32_WINDOW"};
 auto const* const kErrorCodeInvalidValue{"INVALID_VALUE"};
 auto const* const kErrorCodeUnavailable{"UNAVAILABLE"};
 
@@ -123,6 +123,12 @@ auto GetParentOrOwner(HWND window) -> HWND {
   return parent ? parent : GetWindow(window, GW_OWNER);
 }
 
+auto IsClassRegistered(LPCWSTR class_name) -> bool {
+  WNDCLASSEX window_class{};
+  return GetClassInfoEx(GetModuleHandle(nullptr), class_name, &window_class) !=
+         0;
+}
+
 }  // namespace
 
 namespace flutter {
@@ -131,6 +137,12 @@ FlutterWindowController::FlutterWindowController(
     std::shared_ptr<FlutterEngine> engine) {
   engine_ = std::move(engine);
   InitializeChannel(engine_->messenger());
+}
+
+FlutterWindowController::~FlutterWindowController() {
+  if (IsClassRegistered(kWindowClassName)) {
+    UnregisterClass(kWindowClassName, GetModuleHandle(nullptr));
+  }
 }
 
 auto FlutterWindowController::CreateFlutterWindow(
@@ -148,34 +160,35 @@ auto FlutterWindowController::CreateFlutterWindow(
 
   auto window{std::make_unique<FlutterWin32Window>(engine_, this)};
 
+  if (!IsClassRegistered(kWindowClassName)) {
+    auto const idi_app_icon{101};
+    WNDCLASSEX window_class{};
+    window_class.cbSize = sizeof(WNDCLASSEX);
+    window_class.style = CS_HREDRAW | CS_VREDRAW;
+    window_class.lpfnWndProc = Win32Window::WndProc;
+    window_class.cbClsExtra = 0;
+    window_class.cbWndExtra = 0;
+    window_class.hInstance = GetModuleHandle(nullptr);
+    window_class.hIcon =
+        LoadIcon(window_class.hInstance, MAKEINTRESOURCE(idi_app_icon));
+    window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    window_class.hbrBackground = 0;
+    window_class.lpszMenuName = nullptr;
+    window_class.lpszClassName = kWindowClassName;
+    window_class.hIconSm = nullptr;
+
+    RegisterClassEx(&window_class);
+  }
+
   std::optional<HWND> const parent_hwnd{
       parent_view_id.has_value() &&
               windows_.find(parent_view_id.value()) != windows_.end()
           ? std::optional<HWND>{windows_[parent_view_id.value()]->GetHandle()}
           : std::nullopt};
 
-  auto const window_class_name{std::wstring{kWindowClassPrefix} + L"_" +
-                               std::to_wstring(windows_.size())};
-
-  int const idi_app_icon{101};
-  WNDCLASSEX window_class{};
-  window_class.cbSize = sizeof(WNDCLASSEX);
-  window_class.style = CS_HREDRAW | CS_VREDRAW;
-  window_class.lpfnWndProc = Win32Window::WndProc;
-  window_class.cbClsExtra = 0;
-  window_class.cbWndExtra = 0;
-  window_class.hInstance = GetModuleHandle(nullptr);
-  window_class.hIcon =
-      LoadIcon(window_class.hInstance, MAKEINTRESOURCE(idi_app_icon));
-  window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
-  window_class.hbrBackground = 0;
-  window_class.lpszMenuName = nullptr;
-  window_class.lpszClassName = window_class_name.c_str();
-  window_class.hIconSm = nullptr;
-
   lock.unlock();
 
-  if (!window->Create(window_class, title, size, archetype, parent_hwnd,
+  if (!window->Create(kWindowClassName, title, size, archetype, parent_hwnd,
                       positioner)) {
     return std::nullopt;
   }

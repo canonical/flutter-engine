@@ -247,39 +247,6 @@ void UpdateTheme(HWND window) {
   }
 }
 
-// Registers the provided |window_class|. If a window class with the same name
-// is already registered, it will first attempt to unregister the existing
-// class. Logs an error and returns false if either the unregistration or the
-// registration fails. Returns true if the registration succeeds.
-auto RegisterWindowClass(WNDCLASSEX const& window_class) -> bool {
-  // Unregister any previous window class registered with the same name
-  auto const is_class_registered{
-      [](LPCWSTR const& class_name, HINSTANCE instance) {
-        WNDCLASSEX window_class{};
-        return GetClassInfoEx(instance, class_name, &window_class) != 0;
-      }(window_class.lpszClassName, window_class.hInstance)};
-
-  if (is_class_registered) {
-    if (!UnregisterClass(window_class.lpszClassName, window_class.hInstance)) {
-      auto const error_message{GetLastErrorAsString()};
-      std::wcerr << "Cannot unregister window class '"
-                 << window_class.lpszClassName << "': " << error_message.c_str()
-                 << '\n';
-      return false;
-    }
-  }
-
-  if (!RegisterClassExW(&window_class)) {
-    auto const error_message{GetLastErrorAsString()};
-    std::wcerr << "Cannot register window class: '"
-               << window_class.lpszClassName << "': " << error_message.c_str()
-               << '\n';
-    return false;
-  }
-
-  return true;
-}
-
 }  // namespace
 
 namespace flutter {
@@ -287,9 +254,7 @@ namespace flutter {
 Win32Window::Win32Window(FlutterWindowController* window_controller)
     : window_controller_{window_controller} {}
 
-Win32Window::~Win32Window() {}
-
-auto Win32Window::Create(WNDCLASSEX const& window_class,
+auto Win32Window::Create(LPCWSTR class_name,
                          std::wstring const& title,
                          FlutterWindowSize const& client_size,
                          WindowArchetype archetype,
@@ -457,15 +422,11 @@ auto Win32Window::Create(WNDCLASSEX const& window_class,
     return {{CW_USEDEFAULT, CW_USEDEFAULT}, window_size};
   }()};
 
-  if (!RegisterWindowClass(window_class)) {
-    return false;
-  }
-
-  CreateWindowEx(extended_window_style, window_class.lpszClassName,
-                 title.c_str(), window_style, window_rect.top_left.x,
-                 window_rect.top_left.y, window_rect.size.width,
-                 window_rect.size.height, parent.value_or(nullptr), nullptr,
-                 GetModuleHandle(nullptr), this);
+  CreateWindowEx(extended_window_style, class_name, title.c_str(), window_style,
+                 window_rect.top_left.x, window_rect.top_left.y,
+                 window_rect.size.width, window_rect.size.height,
+                 parent.value_or(nullptr), nullptr, GetModuleHandle(nullptr),
+                 this);
 
   if (!window_handle_) {
     auto const error_message{GetLastErrorAsString()};
