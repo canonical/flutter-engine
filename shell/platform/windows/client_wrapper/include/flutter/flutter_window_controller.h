@@ -20,10 +20,10 @@ class FlutterWindowController {
 
   auto CreateFlutterWindow(std::wstring const& title,
                            FlutterWindowSize const& size,
-                           FlutterWindowArchetype archetype,
-                           std::optional<FlutterWindowPositioner> positioner,
+                           WindowArchetype archetype,
+                           std::optional<WindowPositioner> positioner,
                            std::optional<FlutterViewId> parent_view_id)
-      -> std::optional<FlutterWindowCreationResult>;
+      -> std::optional<WindowCreationResult>;
   auto DestroyFlutterWindow(FlutterViewId view_id) -> bool;
 
  private:
@@ -34,12 +34,12 @@ class FlutterWindowController {
                       WPARAM wparam,
                       LPARAM lparam) -> LRESULT;
   void InitializeChannel(BinaryMessenger* messenger);
-  void HandleCreateWindow(FlutterWindowArchetype archetype,
+  void HandleCreateWindow(WindowArchetype archetype,
                           MethodCall<> const& call,
                           std::unique_ptr<MethodResult<>>& result);
   void HandleDestroyWindow(flutter::MethodCall<> const& call,
                            std::unique_ptr<flutter::MethodResult<>>& result);
-  void SendOnWindowCreated(FlutterWindowArchetype archetype,
+  void SendOnWindowCreated(WindowArchetype archetype,
                            FlutterViewId view_id,
                            std::optional<FlutterViewId> parent_view_id) const;
   void SendOnWindowDestroyed(FlutterViewId view_id) const;

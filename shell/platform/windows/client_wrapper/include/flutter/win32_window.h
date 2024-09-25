@@ -37,9 +37,9 @@ class Win32Window {
   auto Create(WNDCLASSEX const& window_class,
               std::wstring const& title,
               FlutterWindowSize const& client_size,
-              FlutterWindowArchetype archetype,
+              WindowArchetype archetype,
               std::optional<HWND> parent,
-              std::optional<FlutterWindowPositioner> positioner) -> bool;
+              std::optional<WindowPositioner> positioner) -> bool;
 
   // Release OS resources associated with window.
   void Destroy();
@@ -93,7 +93,7 @@ class Win32Window {
   static auto GetThisFromHandle(HWND hwnd) -> Win32Window*;
 
   // The window's archetype (e.g., regular, dialog, popup).
-  FlutterWindowArchetype archetype_{FlutterWindowArchetype::regular};
+  WindowArchetype archetype_{WindowArchetype::regular};
 
   // Windows that have this window as their parent or owner.
   std::set<Win32Window*> children_;

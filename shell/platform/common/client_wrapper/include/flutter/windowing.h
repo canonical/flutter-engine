@@ -68,7 +68,7 @@ struct FlutterWindowRectangle {
 };
 
 // Defines how a child window should be positioned relative to its parent.
-struct FlutterWindowPositioner {
+struct WindowPositioner {
   // Allowed anchor positions.
   enum class Anchor {
     center,        // Center.
@@ -117,7 +117,7 @@ struct FlutterWindowPositioner {
 };
 
 // Types of windows.
-enum class FlutterWindowArchetype {
+enum class WindowArchetype {
   // Regular top-level window.
   regular,
   // A window that is on a layer above regular windows and is not dockable.
@@ -133,13 +133,13 @@ enum class FlutterWindowArchetype {
 };
 
 // The result of creating a Flutter window.
-struct FlutterWindowCreationResult {
+struct WindowCreationResult {
   // ID of the created view.
   FlutterViewId view_id{0};
   // ID of the parent view, if any.
   std::optional<FlutterViewId> parent_id;
   // Archetype of the window.
-  FlutterWindowArchetype archetype{FlutterWindowArchetype::regular};
+  WindowArchetype archetype{WindowArchetype::regular};
   // Size of the created window, in logical coordinates.
   FlutterWindowSize size;
 };
@@ -151,10 +151,10 @@ namespace internal {
 // |anchor_rect| is the rectangle relative to which the child window is placed.
 // |parent_rect| is the parent window's rectangle. |output_rect| is the output
 // display area where the child window will be placed. All sizes and rectangles
-// are in physical coordinates. Note: FlutterWindowPositioner::anchor_rect is
-// not used in this function; use |anchor_rect| to set the anchor rectangle for
-// the child.
-auto PlaceWindow(FlutterWindowPositioner const& positioner,
+// are in physical coordinates. Note: WindowPositioner::anchor_rect is not used
+// in this function; use |anchor_rect| to set the anchor rectangle for the
+// child.
+auto PlaceWindow(WindowPositioner const& positioner,
                  FlutterWindowSize child_size,
                  FlutterWindowRectangle const& anchor_rect,
                  FlutterWindowRectangle const& parent_rect,

@@ -8,9 +8,9 @@
 
 namespace flutter {
 
-using Positioner = FlutterWindowPositioner;
-using Anchor = FlutterWindowPositioner::Anchor;
-using Constraint = FlutterWindowPositioner::ConstraintAdjustment;
+using Positioner = WindowPositioner;
+using Anchor = Positioner::Anchor;
+using Constraint = Positioner::ConstraintAdjustment;
 using Rectangle = FlutterWindowRectangle;
 using Point = FlutterWindowPoint;
 using Size = FlutterWindowSize;

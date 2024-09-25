@@ -97,20 +97,19 @@ auto GetListValuesForKeyOrSendError(
 
 // Converts a |flutter::FlutterWindowArchetype| to its corresponding wide
 // string representation.
-auto ArchetypeToWideString(flutter::FlutterWindowArchetype archetype)
-    -> std::wstring {
+auto ArchetypeToWideString(flutter::WindowArchetype archetype) -> std::wstring {
   switch (archetype) {
-    case flutter::FlutterWindowArchetype::regular:
+    case flutter::WindowArchetype::regular:
       return L"regular";
-    case flutter::FlutterWindowArchetype::floating_regular:
+    case flutter::WindowArchetype::floating_regular:
       return L"floating_regular";
-    case flutter::FlutterWindowArchetype::dialog:
+    case flutter::WindowArchetype::dialog:
       return L"dialog";
-    case flutter::FlutterWindowArchetype::satellite:
+    case flutter::WindowArchetype::satellite:
       return L"satellite";
-    case flutter::FlutterWindowArchetype::popup:
+    case flutter::WindowArchetype::popup:
       return L"popup";
-    case flutter::FlutterWindowArchetype::tip:
+    case flutter::WindowArchetype::tip:
       return L"tip";
   }
   std::cerr
@@ -137,10 +136,10 @@ FlutterWindowController::FlutterWindowController(
 auto FlutterWindowController::CreateFlutterWindow(
     std::wstring const& title,
     FlutterWindowSize const& size,
-    FlutterWindowArchetype archetype,
-    std::optional<FlutterWindowPositioner> positioner,
+    WindowArchetype archetype,
+    std::optional<WindowPositioner> positioner,
     std::optional<FlutterViewId> parent_view_id)
-    -> std::optional<FlutterWindowCreationResult> {
+    -> std::optional<WindowCreationResult> {
   std::unique_lock lock(mutex_);
   if (!engine_) {
     std::cerr << "Cannot create window without an engine.\n";
@@ -194,10 +193,10 @@ auto FlutterWindowController::CreateFlutterWindow(
   SendOnWindowCreated(archetype, view_id, parent_view_id);
   SendOnWindowResized(view_id);
 
-  FlutterWindowCreationResult result{.view_id = view_id,
-                                     .parent_id = parent_view_id,
-                                     .archetype = archetype,
-                                     .size = GetWindowSize(view_id)};
+  WindowCreationResult result{.view_id = view_id,
+                              .parent_id = parent_view_id,
+                              .archetype = archetype,
+                              .size = GetWindowSize(view_id)};
 
   return result;
 }
@@ -212,7 +211,7 @@ auto FlutterWindowController::DestroyFlutterWindow(FlutterViewId view_id)
     auto* const window{it->second.get()};
     auto const window_handle{window->GetHandle()};
 
-    if (window->archetype_ == FlutterWindowArchetype::dialog &&
+    if (window->archetype_ == WindowArchetype::dialog &&
         GetWindow(window_handle, GW_OWNER)) {
       // Temporarily disable satellite hiding. This prevents satellites from
       // flickering because of briefly hiding and showing between the
@@ -274,7 +273,7 @@ auto FlutterWindowController::MessageHandler(HWND hwnd,
       return 0;
     case WM_ACTIVATE:
       if (wparam != WA_INACTIVE) {
-        if (window->archetype_ != FlutterWindowArchetype::popup) {
+        if (window->archetype_ != WindowArchetype::popup) {
           // If a non-popup window is activated, close popups for all windows
           decltype(windows_) windows;
           {
@@ -338,13 +337,13 @@ void FlutterWindowController::InitializeChannel(BinaryMessenger* messenger) {
   channel_->SetMethodCallHandler(
       [this](MethodCall<> const& call, std::unique_ptr<MethodResult<>> result) {
         if (call.method_name() == "createRegularWindow") {
-          HandleCreateWindow(FlutterWindowArchetype::regular, call, result);
+          HandleCreateWindow(WindowArchetype::regular, call, result);
         } else if (call.method_name() == "createDialogWindow") {
-          HandleCreateWindow(FlutterWindowArchetype::dialog, call, result);
+          HandleCreateWindow(WindowArchetype::dialog, call, result);
         } else if (call.method_name() == "createSatelliteWindow") {
-          HandleCreateWindow(FlutterWindowArchetype::satellite, call, result);
+          HandleCreateWindow(WindowArchetype::satellite, call, result);
         } else if (call.method_name() == "createPopupWindow") {
-          HandleCreateWindow(FlutterWindowArchetype::popup, call, result);
+          HandleCreateWindow(WindowArchetype::popup, call, result);
         } else if (call.method_name() == "destroyWindow") {
           HandleDestroyWindow(call, result);
         } else {
@@ -354,7 +353,7 @@ void FlutterWindowController::InitializeChannel(BinaryMessenger* messenger) {
 }
 
 void FlutterWindowController::HandleCreateWindow(
-    FlutterWindowArchetype archetype,
+    WindowArchetype archetype,
     MethodCall<> const& call,
     std::unique_ptr<MethodResult<>>& result) {
   auto const* const arguments{call.arguments()};
@@ -379,11 +378,11 @@ void FlutterWindowController::HandleCreateWindow(
     return;
   }
 
-  std::optional<FlutterWindowPositioner> positioner;
+  std::optional<WindowPositioner> positioner;
   std::optional<FlutterWindowRectangle> anchor_rect;
 
-  if (archetype == FlutterWindowArchetype::satellite ||
-      archetype == FlutterWindowArchetype::popup) {
+  if (archetype == WindowArchetype::satellite ||
+      archetype == WindowArchetype::popup) {
     if (auto const anchor_rect_it{map->find(EncodableValue("anchorRect"))};
         anchor_rect_it != map->end()) {
       if (!anchor_rect_it->second.IsNull()) {
@@ -412,8 +411,8 @@ void FlutterWindowController::HandleCreateWindow(
     if (!positioner_child_anchor) {
       return;
     }
-    auto const child_anchor{static_cast<FlutterWindowPositioner::Anchor>(
-        positioner_child_anchor.value())};
+    auto const child_anchor{
+        static_cast<WindowPositioner::Anchor>(positioner_child_anchor.value())};
 
     auto const positioner_offset_list{GetListValuesForKeyOrSendError<int, 2>(
         "positionerOffset", map, result)};
@@ -426,26 +425,26 @@ void FlutterWindowController::HandleCreateWindow(
     if (!positioner_constraint_adjustment) {
       return;
     }
-    positioner = FlutterWindowPositioner{
+    positioner = WindowPositioner{
         .anchor_rect = anchor_rect,
-        .parent_anchor = static_cast<FlutterWindowPositioner::Anchor>(
+        .parent_anchor = static_cast<WindowPositioner::Anchor>(
             positioner_parent_anchor.value()),
         .child_anchor = child_anchor,
         .offset = {positioner_offset_list->at(0),
                    positioner_offset_list->at(1)},
         .constraint_adjustment =
-            static_cast<FlutterWindowPositioner::ConstraintAdjustment>(
+            static_cast<WindowPositioner::ConstraintAdjustment>(
                 positioner_constraint_adjustment.value())};
   }
 
   std::optional<FlutterViewId> parent_view_id;
-  if (archetype == FlutterWindowArchetype::dialog ||
-      archetype == FlutterWindowArchetype::satellite ||
-      archetype == FlutterWindowArchetype::popup) {
+  if (archetype == WindowArchetype::dialog ||
+      archetype == WindowArchetype::satellite ||
+      archetype == WindowArchetype::popup) {
     if (auto const parent_it{map->find(EncodableValue("parent"))};
         parent_it != map->end()) {
       if (parent_it->second.IsNull()) {
-        if (archetype != FlutterWindowArchetype::dialog) {
+        if (archetype != WindowArchetype::dialog) {
           result->Error(kErrorCodeInvalidValue,
                         "Value for 'parent' key must not be null.");
           return;
@@ -455,8 +454,8 @@ void FlutterWindowController::HandleCreateWindow(
           parent_view_id = *parent >= 0 ? std::optional<FlutterViewId>(*parent)
                                         : std::nullopt;
           if (!parent_view_id.has_value() &&
-              (archetype == FlutterWindowArchetype::satellite ||
-               archetype == FlutterWindowArchetype::popup)) {
+              (archetype == WindowArchetype::satellite ||
+               archetype == WindowArchetype::popup)) {
             result->Error(kErrorCodeInvalidValue,
                           "Value for 'parent' key (" +
                               std::to_string(parent_view_id.value()) +
@@ -527,7 +526,7 @@ void FlutterWindowController::HandleDestroyWindow(
 }
 
 void FlutterWindowController::SendOnWindowCreated(
-    FlutterWindowArchetype archetype,
+    WindowArchetype archetype,
     FlutterViewId view_id,
     std::optional<FlutterViewId> parent_view_id) const {
   if (channel_) {
@@ -606,7 +605,7 @@ void FlutterWindowController::HideWindowsSatellites(HWND opt_out_hwnd) {
   // Helper function to check whether |window| has a child dialog.
   auto const has_dialog{[](Win32Window* window) -> bool {
     for (auto* const child : window->children_) {
-      if (child->archetype_ == FlutterWindowArchetype::dialog) {
+      if (child->archetype_ == WindowArchetype::dialog) {
         return true;
       }
     }
@@ -621,7 +620,7 @@ void FlutterWindowController::HideWindowsSatellites(HWND opt_out_hwnd) {
     }
 
     for (auto* const child : window->children_) {
-      if (child->archetype_ != FlutterWindowArchetype::satellite) {
+      if (child->archetype_ != WindowArchetype::satellite) {
         continue;
       }
       if (!has_dialog(child)) {
@@ -640,7 +639,7 @@ void FlutterWindowController::ShowWindowAndAncestorsSatellites(HWND hwnd) {
   while (current) {
     for (auto* const child :
          Win32Window::GetThisFromHandle(current)->children_) {
-      if (child->archetype_ == FlutterWindowArchetype::satellite) {
+      if (child->archetype_ == WindowArchetype::satellite) {
         ShowWindow(child->window_handle_, SW_SHOWNOACTIVATE);
       }
     }
@@ -649,7 +648,7 @@ void FlutterWindowController::ShowWindowAndAncestorsSatellites(HWND hwnd) {
 
   // Hide satellites of all other top-level windows
   if (Win32Window::GetThisFromHandle(hwnd)->archetype_ !=
-      FlutterWindowArchetype::satellite) {
+      WindowArchetype::satellite) {
     HideWindowsSatellites(hwnd);
   }
 }

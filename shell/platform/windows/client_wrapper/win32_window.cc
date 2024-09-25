@@ -292,23 +292,22 @@ Win32Window::~Win32Window() {}
 auto Win32Window::Create(WNDCLASSEX const& window_class,
                          std::wstring const& title,
                          FlutterWindowSize const& client_size,
-                         FlutterWindowArchetype archetype,
+                         WindowArchetype archetype,
                          std::optional<HWND> parent,
-                         std::optional<FlutterWindowPositioner> positioner)
-    -> bool {
+                         std::optional<WindowPositioner> positioner) -> bool {
   archetype_ = archetype;
 
   DWORD window_style{};
   DWORD extended_window_style{};
 
   switch (archetype) {
-    case FlutterWindowArchetype::regular:
+    case WindowArchetype::regular:
       window_style |= WS_OVERLAPPEDWINDOW;
       break;
-    case FlutterWindowArchetype::floating_regular:
+    case WindowArchetype::floating_regular:
       // TODO
       break;
-    case FlutterWindowArchetype::dialog:
+    case WindowArchetype::dialog:
       window_style |= WS_OVERLAPPED | WS_CAPTION;
       extended_window_style |= WS_EX_DLGMODALFRAME;
       if (!parent) {
@@ -324,7 +323,7 @@ auto Win32Window::Create(WNDCLASSEX const& window_class,
         GetThisFromHandle(parent.value())->children_.insert(this);
       }
       break;
-    case FlutterWindowArchetype::satellite:
+    case WindowArchetype::satellite:
       window_style |= WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX;
       extended_window_style |= WS_EX_TOOLWINDOW;
       if (auto* const parent_window{
@@ -338,7 +337,7 @@ auto Win32Window::Create(WNDCLASSEX const& window_class,
         std::abort();
       }
       break;
-    case FlutterWindowArchetype::popup:
+    case WindowArchetype::popup:
       window_style |= WS_POPUP;
       if (auto* const parent_window{
               GetThisFromHandle(parent.value_or(nullptr))}) {
@@ -349,7 +348,7 @@ auto Win32Window::Create(WNDCLASSEX const& window_class,
         ++parent_window->num_child_popups_;
       }
       break;
-    case FlutterWindowArchetype::tip:
+    case WindowArchetype::tip:
       // TODO
       break;
     default:
@@ -386,7 +385,7 @@ auto Win32Window::Create(WNDCLASSEX const& window_class,
             }(parent.value())};
 
         // The anchor rectangle, in physical coordinates
-        auto const anchor_rect{[](FlutterWindowPositioner const& positioner,
+        auto const anchor_rect{[](WindowPositioner const& positioner,
                                   HWND parent_window,
                                   FlutterWindowRectangle const& parent_rect)
                                    -> FlutterWindowRectangle {
@@ -440,7 +439,7 @@ auto Win32Window::Create(WNDCLASSEX const& window_class,
         return {rect.top_left,
                 {rect.size.width + window_size.width - frame_size.width,
                  rect.size.height + window_size.height - frame_size.height}};
-      } else if (archetype == FlutterWindowArchetype::dialog) {
+      } else if (archetype == WindowArchetype::dialog) {
         // Center parented dialog in the parent frame
         RECT parent_frame;
         DwmGetWindowAttribute(parent.value(), DWMWA_EXTENDED_FRAME_BOUNDS,
@@ -499,7 +498,7 @@ auto Win32Window::Create(WNDCLASSEX const& window_class,
 
   UpdateTheme(window_handle_);
 
-  if (archetype == FlutterWindowArchetype::dialog && parent) {
+  if (archetype == WindowArchetype::dialog && parent) {
     UpdateModalState();
   }
 
@@ -561,14 +560,14 @@ auto Win32Window::MessageHandler(HWND hwnd,
       if (wparam == SIZE_MAXIMIZED) {
         // Hide satellites of the maximized window
         for (auto* const child : children_) {
-          if (child->archetype_ == FlutterWindowArchetype::satellite) {
+          if (child->archetype_ == WindowArchetype::satellite) {
             ShowWindow(child->GetHandle(), SW_HIDE);
           }
         }
       } else if (wparam == SIZE_RESTORED) {
         // Show satellites of the restored window
         for (auto* const child : children_) {
-          if (child->archetype_ == FlutterWindowArchetype::satellite) {
+          if (child->archetype_ == WindowArchetype::satellite) {
             ShowWindow(child->GetHandle(), SW_SHOWNOACTIVATE);
           }
         }
@@ -590,7 +589,7 @@ auto Win32Window::MessageHandler(HWND hwnd,
       return 0;
 
     case WM_NCACTIVATE:
-      if (wparam == FALSE && archetype_ != FlutterWindowArchetype::popup) {
+      if (wparam == FALSE && archetype_ != WindowArchetype::popup) {
         if (!enable_redraw_non_client_as_inactive_ || num_child_popups_ > 0) {
           // If an inactive title bar is to be drawn, and this is a top-level
           // window with popups, force the title bar to be drawn in its active
@@ -610,7 +609,7 @@ auto Win32Window::MessageHandler(HWND hwnd,
       RECT window_rect;
       GetWindowRect(hwnd, &window_rect);
       for (auto* const child : children_) {
-        if (child->archetype_ == FlutterWindowArchetype::satellite) {
+        if (child->archetype_ == WindowArchetype::satellite) {
           RECT rect_satellite;
           GetWindowRect(child->GetHandle(), &rect_satellite);
           MoveWindow(child->GetHandle(),
@@ -646,13 +645,13 @@ void Win32Window::CloseChildPopups() {
 
   std::set<Win32Window*> popups;
   for (auto* const child : children_) {
-    if (child->archetype_ == FlutterWindowArchetype::popup) {
+    if (child->archetype_ == WindowArchetype::popup) {
       popups.insert(child);
     }
   }
 
   for (auto it{children_.begin()}; it != children_.end();) {
-    if ((*it)->archetype_ == FlutterWindowArchetype::popup) {
+    if ((*it)->archetype_ == WindowArchetype::popup) {
       it = children_.erase(it);
     } else {
       ++it;
@@ -692,7 +691,7 @@ void Win32Window::UpdateModalState() {
   auto const find_deepest_dialog{
       [](Win32Window* window, auto&& self) -> Win32Window* {
         Win32Window* deepest_dialog{nullptr};
-        if (window->archetype_ == FlutterWindowArchetype::dialog) {
+        if (window->archetype_ == WindowArchetype::dialog) {
           deepest_dialog = window;
         }
         for (auto* const child : window->children_) {
@@ -768,11 +767,11 @@ auto Win32Window::OnCreate() -> bool {
 
 void Win32Window::OnDestroy() {
   switch (archetype_) {
-    case FlutterWindowArchetype::regular:
+    case WindowArchetype::regular:
       break;
-    case FlutterWindowArchetype::floating_regular:
+    case WindowArchetype::floating_regular:
       break;
-    case FlutterWindowArchetype::dialog:
+    case WindowArchetype::dialog:
       if (auto* const owner_window_handle{
               GetWindow(window_handle_, GW_OWNER)}) {
         GetThisFromHandle(owner_window_handle)->children_.erase(this);
@@ -780,14 +779,14 @@ void Win32Window::OnDestroy() {
         SetFocus(owner_window_handle);
       }
       break;
-    case FlutterWindowArchetype::satellite:
+    case WindowArchetype::satellite:
       if (auto* const owner_window_handle{
               GetWindow(window_handle_, GW_OWNER)}) {
         auto* const owner_window{GetThisFromHandle(owner_window_handle)};
         owner_window->children_.erase(this);
       }
       break;
-    case FlutterWindowArchetype::popup:
+    case WindowArchetype::popup:
       if (auto* const parent_window_handle{GetParent(window_handle_)}) {
         auto* const parent_window{GetThisFromHandle(parent_window_handle)};
         parent_window->children_.erase(this);
@@ -795,7 +794,7 @@ void Win32Window::OnDestroy() {
         --parent_window->num_child_popups_;
       }
       break;
-    case FlutterWindowArchetype::tip:
+    case WindowArchetype::tip:
       break;
     default:
       std::cerr << "Unhandled window archetype encountered in "
