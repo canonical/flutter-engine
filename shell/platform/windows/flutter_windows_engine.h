@@ -363,7 +363,7 @@ class FlutterWindowsEngine {
   UniqueAotDataPtr aot_data_;
 
   // The ID that the next view will have.
-  FlutterViewId next_view_id_ = kImplicitViewId;
+  FlutterViewId next_view_id_ = kImplicitViewId + 1;
 
   // The views displaying the content running in this engine, if any.
   //
