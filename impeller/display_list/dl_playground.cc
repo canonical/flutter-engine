@@ -49,7 +49,10 @@ bool DlPlayground::OpenPlaygroundHere(DisplayListPlaygroundCallback callback) {
         auto list = callback();
 
 #if EXPERIMENTAL_CANVAS
-        TextFrameDispatcher collector(context.GetContentContext(), Matrix());
+        TextFrameDispatcher collector(context.GetContentContext(),  //
+                                      Matrix(),                     //
+                                      Rect::MakeMaximum()           //
+        );
         list->Dispatch(collector);
 
         ExperimentalDlDispatcher impeller_dispatcher(
@@ -69,6 +72,11 @@ bool DlPlayground::OpenPlaygroundHere(DisplayListPlaygroundCallback callback) {
         return context.Render(picture, render_target, true);
 #endif
       });
+}
+
+std::unique_ptr<testing::Screenshot> DlPlayground::MakeScreenshot(
+    const sk_sp<flutter::DisplayList>& list) {
+  return nullptr;
 }
 
 SkFont DlPlayground::CreateTestFontOfSize(SkScalar scalar) {

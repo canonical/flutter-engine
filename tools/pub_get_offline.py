@@ -15,7 +15,7 @@ import subprocess
 import sys
 
 THIS_DIR = os.path.abspath(os.path.dirname(__file__))
-sys.path += [os.path.join(THIS_DIR, '..', 'third_party', 'pyyaml', 'lib')]
+sys.path.insert(0, os.path.join(THIS_DIR, '..', 'third_party', 'pyyaml', 'lib'))
 import yaml  # pylint: disable=import-error, wrong-import-position
 
 SRC_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -29,8 +29,6 @@ ALL_PACKAGES = [
     os.path.join(ENGINE_DIR, 'shell', 'vmservice'),
     os.path.join(ENGINE_DIR, 'testing', 'benchmark'),
     os.path.join(ENGINE_DIR, 'testing', 'dart'),
-    os.path.join(ENGINE_DIR, 'testing', 'litetest'),
-    os.path.join(ENGINE_DIR, 'testing', 'pkg_test_demo'),
     os.path.join(ENGINE_DIR, 'testing', 'scenario_app'),
     os.path.join(ENGINE_DIR, 'testing', 'skia_gold_client'),
     os.path.join(ENGINE_DIR, 'testing', 'smoke_test_failure'),
@@ -104,7 +102,6 @@ EXCLUDED_DIRS = [
     os.path.join(ENGINE_DIR, 'shell', 'platform', 'fuchsia'),
     os.path.join(ENGINE_DIR, 'shell', 'vmservice'),
     os.path.join(ENGINE_DIR, 'sky', 'packages'),
-    os.path.join(ENGINE_DIR, 'testing', 'pkg_test_demo'),
     os.path.join(ENGINE_DIR, 'third_party'),
     os.path.join(ENGINE_DIR, 'web_sdk'),
 ]

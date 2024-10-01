@@ -1,10 +1,16 @@
+// Copyright 2013 The Flutter Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 package io.flutter.embedding.engine.renderer;
 
 import static android.content.ComponentCallbacks2.TRIM_MEMORY_COMPLETE;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyFloat;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -381,6 +387,8 @@ public class FlutterRendererTest {
   }
 
   @Test
+  @SuppressWarnings("deprecation")
+  // TRIM_MEMORY_COMPLETE
   public void itNotifySurfaceTextureEntryWhenMemoryPressureWarning() {
     // Setup the test.
     FlutterRenderer flutterRenderer = engineRule.getFlutterEngine().getRenderer();
@@ -727,6 +735,27 @@ public class FlutterRendererTest {
     } finally {
       FlutterRenderer.debugForceSurfaceProducerGlTextures = false;
     }
+  }
+
+  @Test
+  public void SurfaceTextureSurfaceProducerDoesNotCropOrRotate() {
+    try {
+      FlutterRenderer.debugForceSurfaceProducerGlTextures = true;
+      FlutterRenderer flutterRenderer = engineRule.getFlutterEngine().getRenderer();
+      TextureRegistry.SurfaceProducer producer = flutterRenderer.createSurfaceProducer();
+
+      assertTrue(producer.handlesCropAndRotation());
+    } finally {
+      FlutterRenderer.debugForceSurfaceProducerGlTextures = false;
+    }
+  }
+
+  @Test
+  public void ImageReaderSurfaceProducerDoesNotCropOrRotate() {
+    FlutterRenderer flutterRenderer = engineRule.getFlutterEngine().getRenderer();
+    TextureRegistry.SurfaceProducer producer = flutterRenderer.createSurfaceProducer();
+
+    assertFalse(producer.handlesCropAndRotation());
   }
 
   @Test
