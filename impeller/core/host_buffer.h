@@ -19,7 +19,7 @@
 namespace impeller {
 
 /// Approximately the same size as the max frames in flight.
-static const constexpr size_t kHostBufferArenaSize = 3u;
+static const constexpr size_t kHostBufferArenaSize = 4u;
 
 /// The host buffer class manages one more 1024 Kb blocks of device buffer
 /// allocations.
@@ -147,7 +147,11 @@ class HostBuffer {
 
   size_t GetLength() const { return offset_; }
 
-  void MaybeCreateNewBuffer();
+  /// Attempt to create a new internal buffer if the existing capacity is not
+  /// sufficient.
+  ///
+  /// A false return value indicates an unrecoverable allocation failure.
+  [[nodiscard]] bool MaybeCreateNewBuffer();
 
   const std::shared_ptr<DeviceBuffer>& GetCurrentBuffer() const;
 

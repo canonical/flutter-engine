@@ -123,7 +123,7 @@ static constexpr int kNumProfilerSamplesPerSec = 5;
   fml::WeakNSObject<FlutterViewController> _viewController;
   fml::scoped_nsobject<FlutterDartVMServicePublisher> _publisher;
 
-  std::shared_ptr<flutter::FlutterPlatformViewsController> _platformViewsController;
+  std::shared_ptr<flutter::PlatformViewsController> _platformViewsController;
   flutter::IOSRenderingAPI _renderingApi;
   std::shared_ptr<flutter::ProfilerMetricsIOS> _profiler_metrics;
   std::shared_ptr<flutter::SamplingProfiler> _profiler;
@@ -219,7 +219,6 @@ static constexpr int kNumProfilerSamplesPerSec = 5;
   _pluginPublications = [[NSMutableDictionary alloc] init];
   _registrars = [[NSMutableDictionary alloc] init];
   [self recreatePlatformViewController];
-
   _binaryMessenger = [[FlutterBinaryMessengerRelay alloc] initWithParent:self];
   _textureRegistry = [[FlutterTextureRegistryRelay alloc] initWithParent:self];
   _connections.reset(new flutter::ConnectionCollection());
@@ -272,7 +271,7 @@ static constexpr int kNumProfilerSamplesPerSec = 5;
 
 - (void)recreatePlatformViewController {
   _renderingApi = flutter::GetRenderingAPIForProcess(FlutterView.forceSoftwareRendering);
-  _platformViewsController.reset(new flutter::FlutterPlatformViewsController());
+  _platformViewsController.reset(new flutter::PlatformViewsController());
 }
 
 - (flutter::IOSRenderingAPI)platformViewsRenderingAPI {
@@ -496,7 +495,7 @@ static constexpr int kNumProfilerSamplesPerSec = 5;
 - (FlutterPlatformPlugin*)platformPlugin {
   return _platformPlugin.get();
 }
-- (std::shared_ptr<flutter::FlutterPlatformViewsController>&)platformViewsController {
+- (std::shared_ptr<flutter::PlatformViewsController>&)platformViewsController {
   return _platformViewsController;
 }
 - (FlutterTextInputPlugin*)textInputPlugin {
@@ -793,8 +792,10 @@ static flutter::ThreadHost MakeThreadHost(NSString* thread_label,
   // initialized.
   fml::MessageLoop::EnsureInitializedForCurrentThread();
 
-  uint32_t threadHostType = flutter::ThreadHost::Type::kUi | flutter::ThreadHost::Type::kRaster |
-                            flutter::ThreadHost::Type::kIo;
+  uint32_t threadHostType = flutter::ThreadHost::Type::kRaster | flutter::ThreadHost::Type::kIo;
+  if (!settings.enable_impeller) {
+    threadHostType |= flutter::ThreadHost::Type::kUi;
+  }
 
   if ([FlutterEngine isProfilerEnabled]) {
     threadHostType = threadHostType | flutter::ThreadHost::Type::kProfiler;
@@ -803,13 +804,10 @@ static flutter::ThreadHost MakeThreadHost(NSString* thread_label,
   flutter::ThreadHost::ThreadHostConfig host_config(thread_label.UTF8String, threadHostType,
                                                     IOSPlatformThreadConfigSetter);
 
-  if (!settings.merged_platform_ui_thread) {
-    host_config.ui_config =
-        fml::Thread::ThreadConfig(flutter::ThreadHost::ThreadHostConfig::MakeThreadName(
-                                      flutter::ThreadHost::Type::kUi, thread_label.UTF8String),
-                                  fml::Thread::ThreadPriority::kDisplay);
-  }
-
+  host_config.ui_config =
+      fml::Thread::ThreadConfig(flutter::ThreadHost::ThreadHostConfig::MakeThreadName(
+                                    flutter::ThreadHost::Type::kUi, thread_label.UTF8String),
+                                fml::Thread::ThreadPriority::kDisplay);
   host_config.raster_config =
       fml::Thread::ThreadConfig(flutter::ThreadHost::ThreadHostConfig::MakeThreadName(
                                     flutter::ThreadHost::Type::kRaster, thread_label.UTF8String),
@@ -869,6 +867,8 @@ static void SetEntryPoint(flutter::Settings* settings, NSString* entrypoint, NSS
   flutter::Shell::CreateCallback<flutter::PlatformView> on_create_platform_view =
       [self](flutter::Shell& shell) {
         [self recreatePlatformViewController];
+        self->_platformViewsController->SetTaskRunner(
+            shell.GetTaskRunners().GetPlatformTaskRunner());
         return std::make_unique<flutter::PlatformViewIOS>(
             shell, self->_renderingApi, self->_platformViewsController, shell.GetTaskRunners(),
             shell.GetConcurrentWorkerTaskRunner(), shell.GetIsGpuDisabledSyncSwitch());
@@ -878,8 +878,7 @@ static void SetEntryPoint(flutter::Settings* settings, NSString* entrypoint, NSS
       [](flutter::Shell& shell) { return std::make_unique<flutter::Rasterizer>(shell); };
 
   fml::RefPtr<fml::TaskRunner> ui_runner;
-  if (settings.merged_platform_ui_thread) {
-    FML_LOG(IMPORTANT) << "Warning: Using highly experimental merged thread mode.";
+  if (settings.enable_impeller) {
     ui_runner = fml::MessageLoop::GetCurrent().GetTaskRunner();
   } else {
     ui_runner = _threadHost->ui_thread->GetTaskRunner();
@@ -1468,6 +1467,8 @@ static void SetEntryPoint(flutter::Settings* settings, NSString* entrypoint, NSS
   flutter::Shell::CreateCallback<flutter::PlatformView> on_create_platform_view =
       [result, context](flutter::Shell& shell) {
         [result recreatePlatformViewController];
+        result->_platformViewsController->SetTaskRunner(
+            shell.GetTaskRunners().GetPlatformTaskRunner());
         return std::make_unique<flutter::PlatformViewIOS>(
             shell, context, result->_platformViewsController, shell.GetTaskRunners());
       };

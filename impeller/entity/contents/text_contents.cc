@@ -222,8 +222,11 @@ bool TextContents::Render(const ContentContext& renderer,
             Point subpixel = TextFrame::ComputeSubpixelPosition(
                 glyph_position, font.GetAxisAlignment(), offset_, scale_);
             std::optional<std::pair<Rect, Rect>> maybe_atlas_glyph_bounds =
-                font_atlas->FindGlyphBounds(
-                    SubpixelGlyph{glyph_position.glyph, subpixel, properties_});
+                font_atlas->FindGlyphBounds(SubpixelGlyph{
+                    glyph_position.glyph, subpixel,
+                    (properties_.stroke || frame_->HasColor())
+                        ? std::optional<GlyphProperties>(properties_)
+                        : std::nullopt});
             if (!maybe_atlas_glyph_bounds.has_value()) {
               VALIDATION_LOG << "Could not find glyph position in the atlas.";
               continue;
@@ -254,8 +257,9 @@ bool TextContents::Render(const ContentContext& renderer,
             for (const Point& point : unit_points) {
               Point position;
               if (is_translation_scale) {
-                position = screen_glyph_position +
-                           (basis_transform * point * scaled_bounds.GetSize());
+                position = (screen_glyph_position +
+                            (basis_transform * point * scaled_bounds.GetSize()))
+                               .Round();
               } else {
                 position = entity_transform * (glyph_position.position +
                                                scaled_bounds.GetLeftTop() +
