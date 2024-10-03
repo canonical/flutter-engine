@@ -12,42 +12,29 @@
 namespace {
 
 auto const* const kChannel{"flutter/windowing"};
-auto const* const kWindowClassName{L"FLUTTER_WIN32_WINDOW"};
 auto const* const kErrorCodeInvalidValue{"INVALID_VALUE"};
 auto const* const kErrorCodeUnavailable{"UNAVAILABLE"};
-
-// Tracks whether the method channel has been initialized by any window
-// controller. Set to true after the first initialization to prevent
-// reinitialization by other controllers.
-bool g_is_method_channel_initialized{false};
-
-// Controls whether satellites are hidden when their top-level window
-// and all its children become inactive. If null, satellite hiding
-// is enabled. If not null, it contains the handle of the window that
-// disabled the hiding, and it will be reset when the window if fully
-// destroyed.
-HWND g_disable_satellite_hiding{nullptr};
 
 // Retrieves the value associated with |key| from |map|, ensuring it matches
 // the expected type |T|. Returns the value if found and correctly typed,
 // otherwise logs an error in |result| and returns std::nullopt.
 template <typename T>
-auto GetSingleValueForKeyOrSendError(
-    std::string const& key,
-    flutter::EncodableMap const* map,
-    std::unique_ptr<flutter::MethodResult<>>& result) -> std::optional<T> {
+auto GetSingleValueForKeyOrSendError(std::string const& key,
+                                     flutter::EncodableMap const* map,
+                                     flutter::MethodResult<>& result)
+    -> std::optional<T> {
   if (auto const it{map->find(flutter::EncodableValue(key))};
       it != map->end()) {
     if (auto const* const value{std::get_if<T>(&it->second)}) {
       return *value;
     } else {
-      result->Error(kErrorCodeInvalidValue, "Value for '" + key +
-                                                "' key must be of type '" +
-                                                typeid(T).name() + "'.");
+      result.Error(kErrorCodeInvalidValue, "Value for '" + key +
+                                               "' key must be of type '" +
+                                               typeid(T).name() + "'.");
     }
   } else {
-    result->Error(kErrorCodeInvalidValue,
-                  "Map does not contain required '" + key + "' key.");
+    result.Error(kErrorCodeInvalidValue,
+                 "Map does not contain required '" + key + "' key.");
   }
   return std::nullopt;
 }
@@ -56,19 +43,18 @@ auto GetSingleValueForKeyOrSendError(
 // list has |Size| elements, all of type |T|. Returns the list if found and
 // valid, otherwise logs an error in |result| and returns std::nullopt.
 template <typename T, size_t Size>
-auto GetListValuesForKeyOrSendError(
-    std::string const& key,
-    flutter::EncodableMap const* map,
-    std::unique_ptr<flutter::MethodResult<>>& result)
+auto GetListValuesForKeyOrSendError(std::string const& key,
+                                    flutter::EncodableMap const* map,
+                                    flutter::MethodResult<>& result)
     -> std::optional<std::vector<T>> {
   if (auto const it{map->find(flutter::EncodableValue(key))};
       it != map->end()) {
     if (auto const* const array{
             std::get_if<std::vector<flutter::EncodableValue>>(&it->second)}) {
       if (array->size() != Size) {
-        result->Error(kErrorCodeInvalidValue,
-                      "Array for '" + key + "' key must have " +
-                          std::to_string(Size) + " values.");
+        result.Error(kErrorCodeInvalidValue,
+                     "Array for '" + key + "' key must have " +
+                         std::to_string(Size) + " values.");
         return std::nullopt;
       }
       std::vector<T> decoded_values;
@@ -76,27 +62,27 @@ auto GetListValuesForKeyOrSendError(
         if (std::holds_alternative<T>(value)) {
           decoded_values.push_back(std::get<T>(value));
         } else {
-          result->Error(kErrorCodeInvalidValue,
-                        "Array for '" + key +
-                            "' key must only have values of type '" +
-                            typeid(T).name() + "'.");
+          result.Error(kErrorCodeInvalidValue,
+                       "Array for '" + key +
+                           "' key must only have values of type '" +
+                           typeid(T).name() + "'.");
           return std::nullopt;
         }
       }
       return decoded_values;
     } else {
-      result->Error(kErrorCodeInvalidValue,
-                    "Value for '" + key + "' key must be an array.");
+      result.Error(kErrorCodeInvalidValue,
+                   "Value for '" + key + "' key must be an array.");
     }
   } else {
-    result->Error(kErrorCodeInvalidValue,
-                  "Map does not contain required '" + key + "' key.");
+    result.Error(kErrorCodeInvalidValue,
+                 "Map does not contain required '" + key + "' key.");
   }
   return std::nullopt;
 }
 
-// Converts a |flutter::FlutterWindowArchetype| to its corresponding wide
-// string representation.
+// Converts a |flutter::WindowArchetype| to its corresponding wide string
+// representation.
 auto ArchetypeToWideString(flutter::WindowArchetype archetype) -> std::wstring {
   switch (archetype) {
     case flutter::WindowArchetype::regular:
@@ -123,31 +109,48 @@ auto GetParentOrOwner(HWND window) -> HWND {
   return parent ? parent : GetWindow(window, GW_OWNER);
 }
 
-auto IsClassRegistered(LPCWSTR class_name) -> bool {
-  WNDCLASSEX window_class{};
-  return GetClassInfoEx(GetModuleHandle(nullptr), class_name, &window_class) !=
-         0;
-}
-
 }  // namespace
 
 namespace flutter {
 
-FlutterWindowController::FlutterWindowController(
-    std::shared_ptr<FlutterEngine> engine) {
-  engine_ = std::move(engine);
-  InitializeChannel(engine_->messenger());
+FlutterWindowController::~FlutterWindowController() {
+  {
+    std::lock_guard lock(mutex_);
+    if (channel_) {
+      channel_->SetMethodCallHandler(nullptr);
+    }
+  }
+  DestroyWindows();
 }
 
-FlutterWindowController::~FlutterWindowController() {
-  if (IsClassRegistered(kWindowClassName)) {
-    UnregisterClass(kWindowClassName, GetModuleHandle(nullptr));
+void FlutterWindowController::DestroyWindows() {
+  std::unique_lock lock(mutex_);
+  std::vector<FlutterViewId> view_ids;
+  view_ids.reserve(windows_.size());
+  for (auto const& [view_id, _] : windows_) {
+    view_ids.push_back(view_id);
   }
+  lock.unlock();
+  for (auto const& view_id : view_ids) {
+    DestroyFlutterWindow(view_id);
+  }
+}
+
+void FlutterWindowController::SetEngine(std::shared_ptr<FlutterEngine> engine) {
+  DestroyWindows();
+  std::lock_guard const lock(mutex_);
+  engine_ = std::move(engine);
+  channel_ = std::make_unique<MethodChannel<>>(
+      engine_->messenger(), kChannel, &StandardMethodCodec::GetInstance());
+  channel_->SetMethodCallHandler(
+      [this](MethodCall<> const& call, std::unique_ptr<MethodResult<>> result) {
+        MethodCallHandler(call, *result);
+      });
 }
 
 auto FlutterWindowController::CreateFlutterWindow(
     std::wstring const& title,
-    FlutterWindowSize const& size,
+    WindowSize const& size,
     WindowArchetype archetype,
     std::optional<WindowPositioner> positioner,
     std::optional<FlutterViewId> parent_view_id)
@@ -158,27 +161,7 @@ auto FlutterWindowController::CreateFlutterWindow(
     return std::nullopt;
   }
 
-  auto window{std::make_unique<FlutterWin32Window>(engine_, this)};
-
-  if (!IsClassRegistered(kWindowClassName)) {
-    auto const idi_app_icon{101};
-    WNDCLASSEX window_class{};
-    window_class.cbSize = sizeof(WNDCLASSEX);
-    window_class.style = CS_HREDRAW | CS_VREDRAW;
-    window_class.lpfnWndProc = Win32Window::WndProc;
-    window_class.cbClsExtra = 0;
-    window_class.cbWndExtra = 0;
-    window_class.hInstance = GetModuleHandle(nullptr);
-    window_class.hIcon =
-        LoadIcon(window_class.hInstance, MAKEINTRESOURCE(idi_app_icon));
-    window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    window_class.hbrBackground = 0;
-    window_class.lpszMenuName = nullptr;
-    window_class.lpszClassName = kWindowClassName;
-    window_class.hIconSm = nullptr;
-
-    RegisterClassEx(&window_class);
-  }
+  auto window{std::make_unique<FlutterWin32Window>(engine_, win32_)};
 
   std::optional<HWND> const parent_hwnd{
       parent_view_id.has_value() &&
@@ -188,8 +171,7 @@ auto FlutterWindowController::CreateFlutterWindow(
 
   lock.unlock();
 
-  if (!window->Create(kWindowClassName, title, size, archetype, parent_hwnd,
-                      positioner)) {
+  if (!window->Create(title, size, archetype, parent_hwnd, positioner)) {
     return std::nullopt;
   }
 
@@ -219,33 +201,51 @@ auto FlutterWindowController::DestroyFlutterWindow(FlutterViewId view_id)
   std::unique_lock lock(mutex_);
   auto it{windows_.find(view_id)};
   if (it != windows_.end()) {
-    lock.unlock();
-
     auto* const window{it->second.get()};
     auto const window_handle{window->GetHandle()};
 
-    if (window->archetype_ == WindowArchetype::dialog &&
+    if (window->GetArchetype() == WindowArchetype::dialog &&
         GetWindow(window_handle, GW_OWNER)) {
       // Temporarily disable satellite hiding. This prevents satellites from
       // flickering because of briefly hiding and showing between the
       // destruction of a modal dialog and the transfer of focus to the owner
       // window.
-      g_disable_satellite_hiding = window_handle;
+      disable_satellite_hiding_ = window_handle;
     }
 
-    DestroyWindow(window->GetHandle());
+    lock.unlock();
+    win32_->DestroyWindow(window->GetHandle());
+
     return true;
   }
   return false;
+}
+
+FlutterWindowController::FlutterWindowController()
+    : win32_{std::make_shared<Win32Wrapper>()} {}
+
+FlutterWindowController::FlutterWindowController(
+    std::shared_ptr<Win32Wrapper> wrapper)
+    : win32_{std::move(wrapper)} {}
+
+void FlutterWindowController::MethodCallHandler(MethodCall<> const& call,
+                                                MethodResult<>& result) {
+  if (call.method_name() == "createRegularWindow" ||
+      call.method_name() == "createDialogWindow" ||
+      call.method_name() == "createSatelliteWindow" ||
+      call.method_name() == "createPopupWindow") {
+    HandleCreateWindow(call, result);
+  } else if (call.method_name() == "destroyWindow") {
+    HandleDestroyWindow(call, result);
+  } else {
+    result.NotImplemented();
+  }
 }
 
 auto FlutterWindowController::MessageHandler(HWND hwnd,
                                              UINT message,
                                              WPARAM wparam,
                                              LPARAM lparam) -> LRESULT {
-  auto* const window{Win32Window::GetThisFromHandle(hwnd)};
-
-  // Handle any controller-specific logic here
   switch (message) {
     case WM_NCDESTROY: {
       std::unique_lock lock{mutex_};
@@ -272,43 +272,47 @@ auto FlutterWindowController::MessageHandler(HWND hwnd,
 
         SendOnWindowDestroyed(view_id);
 
-        if (g_disable_satellite_hiding == hwnd) {
+        if (disable_satellite_hiding_ == hwnd) {
           // Re-enable satellite hiding by clearing the window handle now that
           // the window is fully destroyed
-          g_disable_satellite_hiding = nullptr;
+          disable_satellite_hiding_ = nullptr;
         }
-      } else {
-        std::cerr << "Cannot find Win32Window for window handle 0x" << std::hex
-                  << std::setfill('0') << std::setw(8) << hwnd << '\n';
-        return -1;
       }
     }
       return 0;
     case WM_ACTIVATE:
       if (wparam != WA_INACTIVE) {
-        if (window->archetype_ != WindowArchetype::popup) {
-          // If a non-popup window is activated, close popups for all windows
-          decltype(windows_) windows;
-          {
-            std::lock_guard const lock(mutex_);
-            windows = windows_;
+        if (auto* const window{Win32Window::GetThisFromHandle(hwnd)}) {
+          if (window->GetArchetype() != WindowArchetype::popup) {
+            // If a non-popup window is activated, close popups for all windows
+            std::unique_lock lock(mutex_);
+            auto it{windows_.begin()};
+            while (it != windows_.end()) {
+              lock.unlock();
+              auto const num_popups_closed{it->second->CloseChildPopups()};
+              lock.lock();
+              if (num_popups_closed > 0) {
+                it = windows_.begin();
+              } else {
+                ++it;
+              }
+            }
+          } else {
+            // If a popup window is activated, close its child popups
+            window->CloseChildPopups();
           }
-          for (auto const& [_, target_window] : windows) {
-            target_window->CloseChildPopups();
-          }
-        } else {
-          // If a popup window is activated, close its child popups
-          window->CloseChildPopups();
         }
         ShowWindowAndAncestorsSatellites(hwnd);
       }
       break;
     case WM_ACTIVATEAPP:
       if (wparam == FALSE) {
-        // Close child popups and hide satellites from all windows if a window
-        // belonging to a different application is being activated
-        window->CloseChildPopups();
-        HideWindowsSatellites(nullptr);
+        if (auto* const window{Win32Window::GetThisFromHandle(hwnd)}) {
+          // Close child popups and hide satellites from all windows if a window
+          // belonging to a different application is being activated
+          window->CloseChildPopups();
+          HideWindowsSatellites(nullptr);
+        }
       }
       break;
     case WM_SIZE: {
@@ -320,59 +324,80 @@ auto FlutterWindowController::MessageHandler(HWND hwnd,
       if (it != windows_.end()) {
         auto const view_id{it->first};
         SendOnWindowResized(view_id);
-      } else {
-        std::cerr << "Cannot find Win32Window for window handle 0x" << std::hex
-                  << std::setfill('0') << std::setw(8) << hwnd << '\n';
-        return -1;
       }
     } break;
     default:
       break;
   }
 
-  return window->MessageHandler(hwnd, message, wparam, lparam);
+  if (auto* const window{Win32Window::GetThisFromHandle(hwnd)}) {
+    return window->MessageHandler(hwnd, message, wparam, lparam);
+  }
+  return DefWindowProc(hwnd, message, wparam, lparam);
 }
 
-void FlutterWindowController::InitializeChannel(BinaryMessenger* messenger) {
-  if (channel_) {
-    return;
-  }
-
-  if (g_is_method_channel_initialized) {
-    std::cerr << "Method channel " << kChannel
-              << " is already initialized by another window controller.\n";
-    std::abort();
-  }
-  g_is_method_channel_initialized = true;
-
-  channel_ = std::make_unique<MethodChannel<>>(
-      messenger, kChannel, &StandardMethodCodec::GetInstance());
-  channel_->SetMethodCallHandler(
-      [this](MethodCall<> const& call, std::unique_ptr<MethodResult<>> result) {
-        if (call.method_name() == "createRegularWindow") {
-          HandleCreateWindow(WindowArchetype::regular, call, result);
-        } else if (call.method_name() == "createDialogWindow") {
-          HandleCreateWindow(WindowArchetype::dialog, call, result);
-        } else if (call.method_name() == "createSatelliteWindow") {
-          HandleCreateWindow(WindowArchetype::satellite, call, result);
-        } else if (call.method_name() == "createPopupWindow") {
-          HandleCreateWindow(WindowArchetype::popup, call, result);
-        } else if (call.method_name() == "destroyWindow") {
-          HandleDestroyWindow(call, result);
-        } else {
-          result->NotImplemented();
-        }
-      });
-}
-
-void FlutterWindowController::HandleCreateWindow(
+void FlutterWindowController::SendOnWindowCreated(
     WindowArchetype archetype,
-    MethodCall<> const& call,
-    std::unique_ptr<MethodResult<>>& result) {
+    FlutterViewId view_id,
+    std::optional<FlutterViewId> parent_view_id) const {
+  if (channel_) {
+    channel_->InvokeMethod(
+        "onWindowCreated",
+        std::make_unique<EncodableValue>(EncodableMap{
+            {EncodableValue("viewId"), EncodableValue(view_id)},
+            {EncodableValue("parentViewId"),
+             parent_view_id ? EncodableValue(parent_view_id.value())
+                            : EncodableValue()},
+            {EncodableValue("archetype"),
+             EncodableValue(static_cast<int>(archetype))}}));
+  }
+}
+
+void FlutterWindowController::SendOnWindowDestroyed(
+    FlutterViewId view_id) const {
+  if (channel_) {
+    channel_->InvokeMethod(
+        "onWindowDestroyed",
+        std::make_unique<EncodableValue>(EncodableMap{
+            {EncodableValue("viewId"), EncodableValue(view_id)},
+        }));
+  }
+}
+
+void FlutterWindowController::SendOnWindowResized(FlutterViewId view_id) const {
+  if (channel_) {
+    auto const size{GetWindowSize(view_id)};
+    channel_->InvokeMethod(
+        "onWindowResized",
+        std::make_unique<EncodableValue>(EncodableMap{
+            {EncodableValue("viewId"), EncodableValue(view_id)},
+            {EncodableValue("width"), EncodableValue(size.width)},
+            {EncodableValue("height"), EncodableValue(size.height)}}));
+  }
+}
+
+void FlutterWindowController::HandleCreateWindow(MethodCall<> const& call,
+                                                 MethodResult<>& result) {
+  auto const archetype{[](std::string const& name) -> WindowArchetype {
+    if (name.find("Regular") != std::string::npos) {
+      return WindowArchetype::regular;
+    }
+    if (name.find("Dialog") != std::string::npos) {
+      return WindowArchetype::dialog;
+    }
+    if (name.find("Satellite") != std::string::npos) {
+      return WindowArchetype::satellite;
+    }
+    if (name.find("Popup") != std::string::npos) {
+      return WindowArchetype::popup;
+    }
+    return WindowArchetype::regular;
+  }(call.method_name())};
+
   auto const* const arguments{call.arguments()};
   auto const* const map{std::get_if<EncodableMap>(arguments)};
   if (!map) {
-    result->Error(kErrorCodeInvalidValue, "Method call argument is not a map.");
+    result.Error(kErrorCodeInvalidValue, "Method call argument is not a map.");
     return;
   }
 
@@ -384,15 +409,15 @@ void FlutterWindowController::HandleCreateWindow(
     return;
   }
   if (size_list->at(0) < 0 || size_list->at(1) < 0) {
-    result->Error(kErrorCodeInvalidValue,
-                  "Values for 'size' key (" + std::to_string(size_list->at(0)) +
-                      ", " + std::to_string(size_list->at(1)) +
-                      ") must be nonnegative.");
+    result.Error(kErrorCodeInvalidValue,
+                 "Values for 'size' key (" + std::to_string(size_list->at(0)) +
+                     ", " + std::to_string(size_list->at(1)) +
+                     ") must be nonnegative.");
     return;
   }
 
   std::optional<WindowPositioner> positioner;
-  std::optional<FlutterWindowRectangle> anchor_rect;
+  std::optional<WindowRectangle> anchor_rect;
 
   if (archetype == WindowArchetype::satellite ||
       archetype == WindowArchetype::popup) {
@@ -404,13 +429,13 @@ void FlutterWindowController::HandleCreateWindow(
         if (!anchor_rect_list) {
           return;
         }
-        anchor_rect = FlutterWindowRectangle{
-            {anchor_rect_list->at(0), anchor_rect_list->at(1)},
-            {anchor_rect_list->at(2), anchor_rect_list->at(3)}};
+        anchor_rect =
+            WindowRectangle{{anchor_rect_list->at(0), anchor_rect_list->at(1)},
+                            {anchor_rect_list->at(2), anchor_rect_list->at(3)}};
       }
     } else {
-      result->Error(kErrorCodeInvalidValue,
-                    "Map does not contain required 'anchorRect' key.");
+      result.Error(kErrorCodeInvalidValue,
+                   "Map does not contain required 'anchorRect' key.");
       return;
     }
 
@@ -458,8 +483,8 @@ void FlutterWindowController::HandleCreateWindow(
         parent_it != map->end()) {
       if (parent_it->second.IsNull()) {
         if (archetype != WindowArchetype::dialog) {
-          result->Error(kErrorCodeInvalidValue,
-                        "Value for 'parent' key must not be null.");
+          result.Error(kErrorCodeInvalidValue,
+                       "Value for 'parent' key must not be null.");
           return;
         }
       } else {
@@ -469,21 +494,21 @@ void FlutterWindowController::HandleCreateWindow(
           if (!parent_view_id.has_value() &&
               (archetype == WindowArchetype::satellite ||
                archetype == WindowArchetype::popup)) {
-            result->Error(kErrorCodeInvalidValue,
-                          "Value for 'parent' key (" +
-                              std::to_string(parent_view_id.value()) +
-                              ") must be nonnegative.");
+            result.Error(kErrorCodeInvalidValue,
+                         "Value for 'parent' key (" +
+                             std::to_string(parent_view_id.value()) +
+                             ") must be nonnegative.");
             return;
           }
         } else {
-          result->Error(kErrorCodeInvalidValue,
-                        "Value for 'parent' key must be of type int.");
+          result.Error(kErrorCodeInvalidValue,
+                       "Value for 'parent' key must be of type int.");
           return;
         }
       }
     } else {
-      result->Error(kErrorCodeInvalidValue,
-                    "Map does not contain required 'parent' key.");
+      result.Error(kErrorCodeInvalidValue,
+                   "Map does not contain required 'parent' key.");
       return;
     }
   }
@@ -492,7 +517,7 @@ void FlutterWindowController::HandleCreateWindow(
           title, {.width = size_list->at(0), .height = size_list->at(1)},
           archetype, positioner, parent_view_id)}) {
     auto const& data{data_opt.value()};
-    result->Success(EncodableValue(EncodableMap{
+    result.Success(EncodableValue(EncodableMap{
         {EncodableValue("viewId"), EncodableValue(data.view_id)},
         {EncodableValue("parentViewId"),
          data.parent_id ? EncodableValue(data.parent_id.value())
@@ -502,17 +527,16 @@ void FlutterWindowController::HandleCreateWindow(
         {EncodableValue("width"), EncodableValue(data.size.width)},
         {EncodableValue("height"), EncodableValue((data.size.height))}}));
   } else {
-    result->Error(kErrorCodeUnavailable, "Can't create window.");
+    result.Error(kErrorCodeUnavailable, "Can't create window.");
   }
 }
 
-void FlutterWindowController::HandleDestroyWindow(
-    MethodCall<> const& call,
-    std::unique_ptr<MethodResult<>>& result) {
+void FlutterWindowController::HandleDestroyWindow(MethodCall<> const& call,
+                                                  MethodResult<>& result) {
   auto const* const arguments{call.arguments()};
   auto const* const map{std::get_if<EncodableMap>(arguments)};
   if (!map) {
-    result->Error(kErrorCodeInvalidValue, "Method call argument is not a map.");
+    result.Error(kErrorCodeInvalidValue, "Method call argument is not a map.");
     return;
   }
 
@@ -522,63 +546,23 @@ void FlutterWindowController::HandleDestroyWindow(
     return;
   }
   if (view_id.value() < 0) {
-    result->Error(kErrorCodeInvalidValue, "Value for 'viewId' (" +
-                                              std::to_string(view_id.value()) +
-                                              ") cannot be negative.");
+    result.Error(kErrorCodeInvalidValue, "Value for 'viewId' (" +
+                                             std::to_string(view_id.value()) +
+                                             ") cannot be negative.");
     return;
   }
 
   if (!DestroyFlutterWindow(view_id.value())) {
-    result->Error(kErrorCodeInvalidValue, "Can't find window with 'viewId' (" +
-                                              std::to_string(view_id.value()) +
-                                              ").");
+    result.Error(kErrorCodeInvalidValue, "Can't find window with 'viewId' (" +
+                                             std::to_string(view_id.value()) +
+                                             ").");
     return;
   }
 
-  result->Success();
+  result.Success();
 }
 
-void FlutterWindowController::SendOnWindowCreated(
-    WindowArchetype archetype,
-    FlutterViewId view_id,
-    std::optional<FlutterViewId> parent_view_id) const {
-  if (channel_) {
-    channel_->InvokeMethod(
-        "onWindowCreated",
-        std::make_unique<EncodableValue>(EncodableMap{
-            {EncodableValue("viewId"), EncodableValue(view_id)},
-            {EncodableValue("parentViewId"),
-             parent_view_id ? EncodableValue(parent_view_id.value())
-                            : EncodableValue()},
-            {EncodableValue("archetype"),
-             EncodableValue(static_cast<int>(archetype))}}));
-  }
-}
-
-void FlutterWindowController::SendOnWindowDestroyed(
-    FlutterViewId view_id) const {
-  if (channel_) {
-    channel_->InvokeMethod(
-        "onWindowDestroyed",
-        std::make_unique<EncodableValue>(EncodableMap{
-            {EncodableValue("viewId"), EncodableValue(view_id)},
-        }));
-  }
-}
-
-void FlutterWindowController::SendOnWindowResized(FlutterViewId view_id) const {
-  if (channel_) {
-    auto const size{GetWindowSize(view_id)};
-    channel_->InvokeMethod(
-        "onWindowResized",
-        std::make_unique<EncodableValue>(EncodableMap{
-            {EncodableValue("viewId"), EncodableValue(view_id)},
-            {EncodableValue("width"), EncodableValue(size.width)},
-            {EncodableValue("height"), EncodableValue(size.height)}}));
-  }
-}
-
-FlutterWindowSize FlutterWindowController::GetWindowSize(
+WindowSize FlutterWindowController::GetWindowSize(
     flutter::FlutterViewId view_id) const {
   auto* const hwnd{windows_.at(view_id)->GetHandle()};
   RECT frame_rect;
@@ -599,7 +583,7 @@ FlutterWindowSize FlutterWindowController::GetWindowSize(
 }
 
 void FlutterWindowController::HideWindowsSatellites(HWND opt_out_hwnd) {
-  if (g_disable_satellite_hiding) {
+  if (disable_satellite_hiding_) {
     return;
   }
 
@@ -617,8 +601,8 @@ void FlutterWindowController::HideWindowsSatellites(HWND opt_out_hwnd) {
 
   // Helper function to check whether |window| has a child dialog.
   auto const has_dialog{[](Win32Window* window) -> bool {
-    for (auto* const child : window->children_) {
-      if (child->archetype_ == WindowArchetype::dialog) {
+    for (auto* const child : window->GetChildren()) {
+      if (child->GetArchetype() == WindowArchetype::dialog) {
         return true;
       }
     }
@@ -627,42 +611,43 @@ void FlutterWindowController::HideWindowsSatellites(HWND opt_out_hwnd) {
 
   std::lock_guard const lock(mutex_);
   for (auto const& [_, window] : windows_) {
-    if (window->window_handle_ == opt_out_hwnd ||
-        is_descendant_of(window->window_handle_, opt_out_hwnd)) {
+    if (window->GetHandle() == opt_out_hwnd ||
+        is_descendant_of(window->GetHandle(), opt_out_hwnd)) {
       continue;
     }
 
-    for (auto* const child : window->children_) {
-      if (child->archetype_ != WindowArchetype::satellite) {
+    for (auto* const child : window->GetChildren()) {
+      if (child->GetArchetype() != WindowArchetype::satellite) {
         continue;
       }
       if (!has_dialog(child)) {
-        ShowWindow(child->window_handle_, SW_HIDE);
+        ShowWindow(child->GetHandle(), SW_HIDE);
       }
     }
   }
 }
 
 void FlutterWindowController::ShowWindowAndAncestorsSatellites(HWND hwnd) {
-  if (g_disable_satellite_hiding) {
+  if (disable_satellite_hiding_) {
     return;
   }
 
   auto current{hwnd};
   while (current) {
     for (auto* const child :
-         Win32Window::GetThisFromHandle(current)->children_) {
-      if (child->archetype_ == WindowArchetype::satellite) {
-        ShowWindow(child->window_handle_, SW_SHOWNOACTIVATE);
+         Win32Window::GetThisFromHandle(current)->GetChildren()) {
+      if (child->GetArchetype() == WindowArchetype::satellite) {
+        ShowWindow(child->GetHandle(), SW_SHOWNOACTIVATE);
       }
     }
     current = GetParentOrOwner(current);
   }
 
   // Hide satellites of all other top-level windows
-  if (Win32Window::GetThisFromHandle(hwnd)->archetype_ !=
-      WindowArchetype::satellite) {
-    HideWindowsSatellites(hwnd);
+  if (auto* const window{Win32Window::GetThisFromHandle(hwnd)}) {
+    if (window->GetArchetype() != WindowArchetype::satellite) {
+      HideWindowsSatellites(hwnd);
+    }
   }
 }
 

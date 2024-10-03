@@ -10,10 +10,10 @@ namespace flutter {
 // A window that does nothing but host a Flutter view.
 class FlutterWin32Window : public Win32Window {
  public:
-  // Creates a new FlutterWin32Window hosting a Flutter view running |engine|
-  // and controlled by |window_controller|.
-  explicit FlutterWin32Window(std::shared_ptr<FlutterEngine> engine,
-                              FlutterWindowController* window_controller);
+  // Creates a new FlutterWin32Window hosting a Flutter view running |engine|.
+  explicit FlutterWin32Window(std::shared_ptr<FlutterEngine> engine);
+  FlutterWin32Window(std::shared_ptr<FlutterEngine> engine,
+                     std::shared_ptr<Win32Wrapper> wrapper);
   ~FlutterWin32Window() override = default;
 
   auto GetFlutterViewId() const -> FlutterViewId;

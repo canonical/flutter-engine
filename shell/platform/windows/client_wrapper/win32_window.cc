@@ -1,15 +1,24 @@
 #include "include/flutter/win32_window.h"
-
 #include "include/flutter/flutter_window_controller.h"
+
+#include "flutter_windows.h"
 
 #include <algorithm>
 #include <cassert>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
 
 #include <dwmapi.h>
 
 namespace {
+
+auto const* const kWindowClassName{L"FLUTTER_WIN32_WINDOW"};
+
+// The number of Win32Window objects that currently exist.
+static int gActiveWindowCount{0};
+// A mutex for thread-safe use of the window count.
+static std::mutex gActiveWindowMutex;
 
 // Retrieves the calling thread's last-error code message as a string,
 // or a fallback message if the error message cannot be formatted.
@@ -47,10 +56,10 @@ auto GetLastErrorAsString() -> std::string {
 // Estimates the size of the window frame, in physical coordinates, based on
 // the given |window_size| (in physical coordinates) and the specified
 // |window_style|, |extended_window_style|, and parent window |parent_hwnd|.
-auto GetFrameSizeForWindowSize(flutter::FlutterWindowSize const& window_size,
+auto GetFrameSizeForWindowSize(flutter::WindowSize const& window_size,
                                DWORD window_style,
                                DWORD extended_window_style,
-                               HWND parent_hwnd) -> flutter::FlutterWindowSize {
+                               HWND parent_hwnd) -> flutter::WindowSize {
   RECT frame_rect{0, 0, static_cast<LONG>(window_size.width),
                   static_cast<LONG>(window_size.height)};
 
@@ -80,11 +89,10 @@ auto GetFrameSizeForWindowSize(flutter::FlutterWindowSize const& window_size,
 // accommodate the given |client_size| (in logical coordinates) for a window
 // with the specified |window_style| and |extended_window_style|. The result
 // accounts for window borders, non-client areas, and drop-shadow effects.
-auto GetWindowSizeForClientSize(flutter::FlutterWindowSize const& client_size,
+auto GetWindowSizeForClientSize(flutter::WindowSize const& client_size,
                                 DWORD window_style,
                                 DWORD extended_window_style,
-                                HWND parent_hwnd)
-    -> flutter::FlutterWindowSize {
+                                HWND parent_hwnd) -> flutter::WindowSize {
   auto const dpi{FlutterDesktopGetDpiForHWND(parent_hwnd)};
   auto const scale_factor{static_cast<double>(dpi) / USER_DEFAULT_SCREEN_DPI};
   RECT rect{.left = 0,
@@ -143,7 +151,8 @@ auto GetOffsetBetweenWindows(HWND from, HWND to) -> POINT {
   return offset;
 }
 
-// Dynamically loads the |EnableNonClientDpiScaling| from the User32 module.
+// Dynamically loads the |EnableNonClientDpiScaling| from the User32 module
+// so that the non-client area automatically responds to changes in DPI.
 // This API is only needed for PerMonitor V1 awareness mode.
 void EnableFullDpiSupportIfAvailable(HWND hwnd) {
   HMODULE user32_module = LoadLibraryA("User32.dll");
@@ -163,8 +172,8 @@ void EnableFullDpiSupportIfAvailable(HWND hwnd) {
   FreeLibrary(user32_module);
 }
 
-// Dynamically loads |SetWindowCompositionAttribute| from the User32 module uses
-// it to make the window's background transparent.
+// Dynamically loads |SetWindowCompositionAttribute| from the User32 module to
+// make the window's background transparent.
 void EnableTransparentWindowBackground(HWND hwnd) {
   HMODULE const user32_module{LoadLibraryA("User32.dll")};
   if (!user32_module) {
@@ -247,19 +256,65 @@ void UpdateTheme(HWND window) {
   }
 }
 
+auto IsClassRegistered(LPCWSTR class_name) -> bool {
+  WNDCLASSEX window_class{};
+  return GetClassInfoEx(GetModuleHandle(nullptr), class_name, &window_class) !=
+         0;
+}
+
 }  // namespace
 
 namespace flutter {
 
-Win32Window::Win32Window(FlutterWindowController* window_controller)
-    : window_controller_{window_controller} {}
+Win32Window::Win32Window() : win32_{std::make_shared<Win32Wrapper>()} {}
 
-auto Win32Window::Create(LPCWSTR class_name,
-                         std::wstring const& title,
-                         FlutterWindowSize const& client_size,
+Win32Window::Win32Window(std::shared_ptr<Win32Wrapper> wrapper)
+    : win32_{std::move(wrapper)} {}
+
+Win32Window::~Win32Window() {
+  std::lock_guard lock(gActiveWindowMutex);
+  if (--gActiveWindowCount == 0) {
+    UnregisterClass(kWindowClassName, GetModuleHandle(nullptr));
+  }
+}
+
+auto Win32Window::GetThisFromHandle(HWND hwnd) -> Win32Window* {
+  return reinterpret_cast<Win32Window*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+}
+
+auto Win32Window::GetHandle() const -> HWND {
+  return window_handle_;
+}
+
+void Win32Window::SetQuitOnClose(bool quit_on_close) {
+  quit_on_close_ = quit_on_close;
+}
+
+auto Win32Window::GetQuitOnClose() const -> bool {
+  return quit_on_close_;
+}
+
+auto Win32Window::GetClientArea() const -> RECT {
+  RECT client_rect;
+  GetClientRect(window_handle_, &client_rect);
+  return client_rect;
+}
+
+auto Win32Window::GetArchetype() const -> WindowArchetype {
+  return archetype_;
+}
+
+auto Win32Window::GetChildren() const -> std::set<Win32Window*> const& {
+  return children_;
+}
+
+auto Win32Window::Create(std::wstring const& title,
+                         WindowSize const& client_size,
                          WindowArchetype archetype,
                          std::optional<HWND> parent,
                          std::optional<WindowPositioner> positioner) -> bool {
+  std::lock_guard lock(gActiveWindowMutex);
+
   archetype_ = archetype;
 
   DWORD window_style{};
@@ -285,7 +340,9 @@ auto Win32Window::Create(LPCWSTR class_name,
         if (GetWindowLongPtr(parent.value(), GWL_EXSTYLE) & WS_EX_TOOLWINDOW) {
           extended_window_style |= WS_EX_TOOLWINDOW;
         }
-        GetThisFromHandle(parent.value())->children_.insert(this);
+        if (auto* const parent_window{GetThisFromHandle(parent.value())}) {
+          parent_window->children_.insert(this);
+        }
       }
       break;
     case WindowArchetype::satellite:
@@ -326,7 +383,7 @@ auto Win32Window::Create(LPCWSTR class_name,
   // Default positioning values (CW_USEDEFAULT) are used
   // if the window has no parent or positioner. Parented dialogs will be
   // centered in the parent's frame.
-  auto const window_rect{[&]() -> FlutterWindowRectangle {
+  auto const window_rect{[&]() -> WindowRectangle {
     auto const window_size{GetWindowSizeForClientSize(
         client_size, window_style, extended_window_style,
         parent.value_or(nullptr))};
@@ -336,24 +393,22 @@ auto Win32Window::Create(LPCWSTR class_name,
             window_size, window_style, extended_window_style, parent.value())};
 
         // The rectangle of the parent's client area, in physical coordinates
-        auto const parent_rect{
-            [](HWND parent_window) -> FlutterWindowRectangle {
-              RECT client_rect;
-              GetClientRect(parent_window, &client_rect);
-              POINT top_left{client_rect.left, client_rect.top};
-              ClientToScreen(parent_window, &top_left);
-              POINT bottom_right{client_rect.right, client_rect.bottom};
-              ClientToScreen(parent_window, &bottom_right);
-              return {
-                  {top_left.x, top_left.y},
+        auto const parent_rect{[](HWND parent_window) -> WindowRectangle {
+          RECT client_rect;
+          GetClientRect(parent_window, &client_rect);
+          POINT top_left{client_rect.left, client_rect.top};
+          ClientToScreen(parent_window, &top_left);
+          POINT bottom_right{client_rect.right, client_rect.bottom};
+          ClientToScreen(parent_window, &bottom_right);
+          return {{top_left.x, top_left.y},
                   {bottom_right.x - top_left.x, bottom_right.y - top_left.y}};
-            }(parent.value())};
+        }(parent.value())};
 
         // The anchor rectangle, in physical coordinates
         auto const anchor_rect{[](WindowPositioner const& positioner,
                                   HWND parent_window,
-                                  FlutterWindowRectangle const& parent_rect)
-                                   -> FlutterWindowRectangle {
+                                  WindowRectangle const& parent_rect)
+                                   -> WindowRectangle {
           if (positioner.anchor_rect) {
             auto const dpr{FlutterDesktopGetDpiForHWND(parent_window) /
                            static_cast<double>(USER_DEFAULT_SCREEN_DPI)};
@@ -381,7 +436,7 @@ auto Win32Window::Create(LPCWSTR class_name,
         // with the anchor rectangle, in physical coordinates
         auto const output_rect{
             [](RECT anchor_rect)
-                -> FlutterWindowRectangle {
+                -> WindowRectangle {
               auto* monitor{
                   MonitorFromRect(&anchor_rect, MONITOR_DEFAULTTONEAREST)};
               MONITORINFO mi;
@@ -409,7 +464,7 @@ auto Win32Window::Create(LPCWSTR class_name,
         RECT parent_frame;
         DwmGetWindowAttribute(parent.value(), DWMWA_EXTENDED_FRAME_BOUNDS,
                               &parent_frame, sizeof(parent_frame));
-        FlutterWindowPoint const top_left{
+        WindowPoint const top_left{
             static_cast<int>(
                 (parent_frame.left + parent_frame.right - window_size.width) *
                 0.5),
@@ -422,11 +477,31 @@ auto Win32Window::Create(LPCWSTR class_name,
     return {{CW_USEDEFAULT, CW_USEDEFAULT}, window_size};
   }()};
 
-  CreateWindowEx(extended_window_style, class_name, title.c_str(), window_style,
-                 window_rect.top_left.x, window_rect.top_left.y,
-                 window_rect.size.width, window_rect.size.height,
-                 parent.value_or(nullptr), nullptr, GetModuleHandle(nullptr),
-                 this);
+  if (!IsClassRegistered(kWindowClassName)) {
+    auto const idi_app_icon{101};
+    WNDCLASSEX window_class{};
+    window_class.cbSize = sizeof(WNDCLASSEX);
+    window_class.style = CS_HREDRAW | CS_VREDRAW;
+    window_class.lpfnWndProc = Win32Window::WndProc;
+    window_class.cbClsExtra = 0;
+    window_class.cbWndExtra = 0;
+    window_class.hInstance = GetModuleHandle(nullptr);
+    window_class.hIcon =
+        LoadIcon(window_class.hInstance, MAKEINTRESOURCE(idi_app_icon));
+    window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    window_class.hbrBackground = 0;
+    window_class.lpszMenuName = nullptr;
+    window_class.lpszClassName = kWindowClassName;
+    window_class.hIconSm = nullptr;
+
+    RegisterClassEx(&window_class);
+  }
+
+  window_handle_ = win32_->CreateWindowEx(
+      extended_window_style, kWindowClassName, title.c_str(), window_style,
+      window_rect.top_left.x, window_rect.top_left.y, window_rect.size.width,
+      window_rect.size.height, parent.value_or(nullptr), nullptr,
+      GetModuleHandle(nullptr), this);
 
   if (!window_handle_) {
     auto const error_message{GetLastErrorAsString()};
@@ -463,35 +538,27 @@ auto Win32Window::Create(LPCWSTR class_name,
     UpdateModalState();
   }
 
+  gActiveWindowCount++;
+
   ShowWindow(window_handle_, SW_SHOW);
 
   return OnCreate();
 }
 
-// static
-auto CALLBACK Win32Window::WndProc(HWND hwnd,
-                                   UINT message,
-                                   WPARAM wparam,
-                                   LPARAM lparam) -> LRESULT {
-  if (message == WM_NCCREATE) {
-    auto* const create_struct{reinterpret_cast<CREATESTRUCT*>(lparam)};
-    SetWindowLongPtr(hwnd, GWLP_USERDATA,
-                     reinterpret_cast<LONG_PTR>(create_struct->lpCreateParams));
-    auto* const window{
-        static_cast<Win32Window*>(create_struct->lpCreateParams)};
-    window->window_handle_ = hwnd;
+void Win32Window::Destroy() {
+  OnDestroy();
+}
 
-    EnableFullDpiSupportIfAvailable(hwnd);
-    EnableTransparentWindowBackground(hwnd);
+void Win32Window::SetChildContent(HWND content) {
+  child_content_ = content;
+  SetParent(content, window_handle_);
+  auto const client_rect{GetClientArea()};
 
-    return window->window_controller_->MessageHandler(hwnd, message, wparam,
-                                                      lparam);
-  } else if (auto* const window{GetThisFromHandle(hwnd)}) {
-    return window->window_controller_->MessageHandler(hwnd, message, wparam,
-                                                      lparam);
-  }
+  MoveWindow(content, client_rect.left, client_rect.top,
+             client_rect.right - client_rect.left,
+             client_rect.bottom - client_rect.top, true);
 
-  return DefWindowProc(hwnd, message, wparam, lparam);
+  SetFocus(child_content_);
 }
 
 auto Win32Window::MessageHandler(HWND hwnd,
@@ -599,9 +666,81 @@ auto Win32Window::MessageHandler(HWND hwnd,
   return DefWindowProc(window_handle_, message, wparam, lparam);
 }
 
-void Win32Window::CloseChildPopups() {
+auto Win32Window::OnCreate() -> bool {
+  // No-op; provided for subclasses.
+  return true;
+}
+
+void Win32Window::OnDestroy() {
+  switch (archetype_) {
+    case WindowArchetype::regular:
+      break;
+    case WindowArchetype::floating_regular:
+      break;
+    case WindowArchetype::dialog:
+      if (auto* const owner_window_handle{
+              GetWindow(window_handle_, GW_OWNER)}) {
+        if (auto* const owner_window{GetThisFromHandle(owner_window_handle)}) {
+          owner_window->children_.erase(this);
+        }
+        UpdateModalState();
+        SetFocus(owner_window_handle);
+      }
+      break;
+    case WindowArchetype::satellite:
+      if (auto* const owner_window_handle{
+              GetWindow(window_handle_, GW_OWNER)}) {
+        if (auto* const owner_window{GetThisFromHandle(owner_window_handle)}) {
+          owner_window->children_.erase(this);
+        }
+      }
+      break;
+    case WindowArchetype::popup:
+      if (auto* const parent_window_handle{GetParent(window_handle_)}) {
+        if (auto* const parent_window{
+                GetThisFromHandle(parent_window_handle)}) {
+          parent_window->children_.erase(this);
+          assert(parent_window->num_child_popups_ > 0);
+          --parent_window->num_child_popups_;
+        }
+      }
+      break;
+    case WindowArchetype::tip:
+      break;
+    default:
+      std::cerr << "Unhandled window archetype encountered in "
+                   "Win32Window::OnDestroy: "
+                << static_cast<int>(archetype_) << "\n";
+      std::abort();
+  }
+}
+
+// static
+auto CALLBACK Win32Window::WndProc(HWND hwnd,
+                                   UINT message,
+                                   WPARAM wparam,
+                                   LPARAM lparam) -> LRESULT {
+  if (message == WM_NCCREATE) {
+    auto* const create_struct{reinterpret_cast<CREATESTRUCT*>(lparam)};
+    SetWindowLongPtr(hwnd, GWLP_USERDATA,
+                     reinterpret_cast<LONG_PTR>(create_struct->lpCreateParams));
+    auto* const window{
+        static_cast<Win32Window*>(create_struct->lpCreateParams)};
+    window->window_handle_ = hwnd;
+
+    EnableFullDpiSupportIfAvailable(hwnd);
+    EnableTransparentWindowBackground(hwnd);
+  } else if (auto* const window{GetThisFromHandle(hwnd)}) {
+    return FlutterWindowController::GetInstance().MessageHandler(
+        hwnd, message, wparam, lparam);
+  }
+
+  return DefWindowProc(hwnd, message, wparam, lparam);
+}
+
+auto Win32Window::CloseChildPopups() -> std::size_t {
   if (num_child_popups_ == 0) {
-    return;
+    return 0;
   }
 
   std::set<Win32Window*> popups;
@@ -619,26 +758,30 @@ void Win32Window::CloseChildPopups() {
     }
   }
 
+  auto const previous_num_child_popups{num_child_popups_};
+
   for (auto* popup : popups) {
     auto const parent_handle{GetParent(popup->window_handle_)};
-    auto* const parent{GetThisFromHandle(parent_handle)};
+    if (auto* const parent{GetThisFromHandle(parent_handle)}) {
+      // Popups' parents are drawn with active colors even though they are
+      // actually inactive. When a popup is destroyed, the parent might be
+      // redrawn as inactive (reflecting its true state) before being redrawn as
+      // active. To prevent flickering during this transition, disable
+      // redrawing the non-client area as inactive.
+      parent->enable_redraw_non_client_as_inactive_ = false;
+      DestroyWindow(popup->GetHandle());
+      parent->enable_redraw_non_client_as_inactive_ = true;
 
-    // Popups' parents are drawn with active colors even though they are
-    // actually inactive. When a popup is destroyed, the parent might be
-    // redrawn as inactive (reflecting its true state) before being redrawn as
-    // active. To prevent flickering during this transition, disable
-    // redrawing the non-client area as inactive.
-    parent->enable_redraw_non_client_as_inactive_ = false;
-    DestroyWindow(popup->GetHandle());
-    parent->enable_redraw_non_client_as_inactive_ = true;
-
-    // Repaint parent window to make sure its title bar is painted with the
-    // color based on its actual activation state
-    if (parent->num_child_popups_ == 0) {
-      SetWindowPos(parent_handle, nullptr, 0, 0, 0, 0,
-                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+      // Repaint parent window to make sure its title bar is painted with the
+      // color based on its actual activation state
+      if (parent->num_child_popups_ == 0) {
+        SetWindowPos(parent_handle, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+      }
     }
   }
+
+  return previous_num_child_popups - num_child_popups_;
 }
 
 void Win32Window::EnableWindowAndDescendants(bool enable) {
@@ -672,96 +815,14 @@ void Win32Window::UpdateModalState() {
   while (auto* next{get_parent_or_owner(root_ancestor_handle)}) {
     root_ancestor_handle = next;
   }
-  auto* const root_ancestor{GetThisFromHandle(root_ancestor_handle)};
-
-  if (auto* const deepest_dialog{
-          find_deepest_dialog(root_ancestor, find_deepest_dialog)}) {
-    root_ancestor->EnableWindowAndDescendants(false);
-    deepest_dialog->EnableWindowAndDescendants(true);
-  } else {
-    root_ancestor->EnableWindowAndDescendants(true);
-  }
-}
-
-void Win32Window::Destroy() {
-  OnDestroy();
-}
-
-auto Win32Window::GetThisFromHandle(HWND hwnd) -> Win32Window* {
-  return reinterpret_cast<Win32Window*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
-}
-
-void Win32Window::SetChildContent(HWND content) {
-  child_content_ = content;
-  SetParent(content, window_handle_);
-  auto const client_rect{GetClientArea()};
-
-  MoveWindow(content, client_rect.left, client_rect.top,
-             client_rect.right - client_rect.left,
-             client_rect.bottom - client_rect.top, true);
-
-  SetFocus(child_content_);
-}
-
-auto Win32Window::GetClientArea() const -> RECT {
-  RECT client_rect;
-  GetClientRect(window_handle_, &client_rect);
-  return client_rect;
-}
-
-auto Win32Window::GetHandle() const -> HWND {
-  return window_handle_;
-}
-
-void Win32Window::SetQuitOnClose(bool quit_on_close) {
-  quit_on_close_ = quit_on_close;
-}
-
-auto Win32Window::GetQuitOnClose() const -> bool {
-  return quit_on_close_;
-}
-
-auto Win32Window::OnCreate() -> bool {
-  // No-op; provided for subclasses.
-  return true;
-}
-
-void Win32Window::OnDestroy() {
-  switch (archetype_) {
-    case WindowArchetype::regular:
-      break;
-    case WindowArchetype::floating_regular:
-      break;
-    case WindowArchetype::dialog:
-      if (auto* const owner_window_handle{
-              GetWindow(window_handle_, GW_OWNER)}) {
-        GetThisFromHandle(owner_window_handle)->children_.erase(this);
-        UpdateModalState();
-        SetFocus(owner_window_handle);
-      }
-      break;
-    case WindowArchetype::satellite:
-      if (auto* const owner_window_handle{
-              GetWindow(window_handle_, GW_OWNER)}) {
-        auto* const owner_window{GetThisFromHandle(owner_window_handle)};
-        owner_window->children_.erase(this);
-      }
-      break;
-    case WindowArchetype::popup:
-      if (auto* const parent_window_handle{GetParent(window_handle_)}) {
-        auto* const parent_window{GetThisFromHandle(parent_window_handle)};
-        parent_window->children_.erase(this);
-        assert(parent_window->num_child_popups_ > 0);
-        --parent_window->num_child_popups_;
-      }
-      break;
-    case WindowArchetype::tip:
-      break;
-    default:
-      std::cerr << "Unhandled window archetype encountered in "
-                   "Win32Window::OnDestroy: "
-                << static_cast<int>(archetype_) << "\n";
-      std::abort();
+  if (auto* const root_ancestor{GetThisFromHandle(root_ancestor_handle)}) {
+    if (auto* const deepest_dialog{
+            find_deepest_dialog(root_ancestor, find_deepest_dialog)}) {
+      root_ancestor->EnableWindowAndDescendants(false);
+      deepest_dialog->EnableWindowAndDescendants(true);
+    } else {
+      root_ancestor->EnableWindowAndDescendants(true);
+    }
   }
 }
 

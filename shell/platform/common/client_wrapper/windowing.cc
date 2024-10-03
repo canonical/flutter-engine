@@ -11,8 +11,8 @@ namespace flutter {
 
 namespace {
 
-auto offset_for(FlutterWindowSize const& size,
-                WindowPositioner::Anchor anchor) -> FlutterWindowPoint {
+auto offset_for(WindowSize const& size,
+                WindowPositioner::Anchor anchor) -> WindowPoint {
   switch (anchor) {
     case WindowPositioner::Anchor::top_left:
       return {0, 0};
@@ -38,40 +38,36 @@ auto offset_for(FlutterWindowSize const& size,
   }
 }
 
-auto anchor_position_for(FlutterWindowRectangle const& rect,
-                         WindowPositioner::Anchor anchor)
-    -> FlutterWindowPoint {
+auto anchor_position_for(WindowRectangle const& rect,
+                         WindowPositioner::Anchor anchor) -> WindowPoint {
   switch (anchor) {
     case WindowPositioner::Anchor::top_left:
       return rect.top_left;
     case WindowPositioner::Anchor::top:
-      return rect.top_left + FlutterWindowPoint{rect.size.width / 2, 0};
+      return rect.top_left + WindowPoint{rect.size.width / 2, 0};
     case WindowPositioner::Anchor::top_right:
-      return rect.top_left + FlutterWindowPoint{rect.size.width, 0};
+      return rect.top_left + WindowPoint{rect.size.width, 0};
     case WindowPositioner::Anchor::left:
-      return rect.top_left + FlutterWindowPoint{0, rect.size.height / 2};
+      return rect.top_left + WindowPoint{0, rect.size.height / 2};
     case WindowPositioner::Anchor::center:
       return rect.top_left +
-             FlutterWindowPoint{rect.size.width / 2, rect.size.height / 2};
+             WindowPoint{rect.size.width / 2, rect.size.height / 2};
     case WindowPositioner::Anchor::right:
-      return rect.top_left +
-             FlutterWindowPoint{rect.size.width, rect.size.height / 2};
+      return rect.top_left + WindowPoint{rect.size.width, rect.size.height / 2};
     case WindowPositioner::Anchor::bottom_left:
-      return rect.top_left + FlutterWindowPoint{0, rect.size.height};
+      return rect.top_left + WindowPoint{0, rect.size.height};
     case WindowPositioner::Anchor::bottom:
-      return rect.top_left +
-             FlutterWindowPoint{rect.size.width / 2, rect.size.height};
+      return rect.top_left + WindowPoint{rect.size.width / 2, rect.size.height};
     case WindowPositioner::Anchor::bottom_right:
-      return rect.top_left +
-             FlutterWindowPoint{rect.size.width, rect.size.height};
+      return rect.top_left + WindowPoint{rect.size.width, rect.size.height};
     default:
       std::cerr << "Unknown anchor value: " << static_cast<int>(anchor) << '\n';
       std::abort();
   }
 }
 
-auto constrain_to(FlutterWindowRectangle const& r,
-                  FlutterWindowPoint const& p) -> FlutterWindowPoint {
+auto constrain_to(WindowRectangle const& r,
+                  WindowPoint const& p) -> WindowPoint {
   return {std::clamp(p.x, r.top_left.x, r.top_left.x + r.size.width),
           std::clamp(p.y, r.top_left.y, r.top_left.y + r.size.height)};
 }
@@ -116,11 +112,11 @@ auto flip_anchor_y(WindowPositioner::Anchor anchor)
   }
 }
 
-auto flip_offset_x(FlutterWindowPoint const& p) -> FlutterWindowPoint {
+auto flip_offset_x(WindowPoint const& p) -> WindowPoint {
   return {-1 * p.x, p.y};
 }
 
-auto flip_offset_y(FlutterWindowPoint const& p) -> FlutterWindowPoint {
+auto flip_offset_y(WindowPoint const& p) -> WindowPoint {
   return {p.x, -1 * p.y};
 }
 
@@ -129,12 +125,11 @@ auto flip_offset_y(FlutterWindowPoint const& p) -> FlutterWindowPoint {
 namespace internal {
 
 auto PlaceWindow(WindowPositioner const& positioner,
-                 FlutterWindowSize child_size,
-                 FlutterWindowRectangle const& anchor_rect,
-                 FlutterWindowRectangle const& parent_rect,
-                 FlutterWindowRectangle const& output_rect)
-    -> FlutterWindowRectangle {
-  FlutterWindowRectangle default_result;
+                 WindowSize child_size,
+                 WindowRectangle const& anchor_rect,
+                 WindowRectangle const& parent_rect,
+                 WindowRectangle const& output_rect) -> WindowRectangle {
+  WindowRectangle default_result;
 
   {
     auto const result{
@@ -144,10 +139,10 @@ auto PlaceWindow(WindowPositioner const& positioner,
         offset_for(child_size, positioner.child_anchor)};
 
     if (output_rect.contains({result, child_size})) {
-      return FlutterWindowRectangle{result, child_size};
+      return WindowRectangle{result, child_size};
     }
 
-    default_result = FlutterWindowRectangle{result, child_size};
+    default_result = WindowRectangle{result, child_size};
   }
 
   if (positioner.constraint_adjustment &
@@ -160,7 +155,7 @@ auto PlaceWindow(WindowPositioner const& positioner,
         offset_for(child_size, flip_anchor_x(positioner.child_anchor))};
 
     if (output_rect.contains({result, child_size})) {
-      return FlutterWindowRectangle{result, child_size};
+      return WindowRectangle{result, child_size};
     }
   }
 
@@ -174,7 +169,7 @@ auto PlaceWindow(WindowPositioner const& positioner,
         offset_for(child_size, flip_anchor_y(positioner.child_anchor))};
 
     if (output_rect.contains({result, child_size})) {
-      return FlutterWindowRectangle{result, child_size};
+      return WindowRectangle{result, child_size};
     }
   }
 
@@ -192,7 +187,7 @@ auto PlaceWindow(WindowPositioner const& positioner,
                    flip_anchor_x(flip_anchor_y(positioner.child_anchor)))};
 
     if (output_rect.contains({result, child_size})) {
-      return FlutterWindowRectangle{result, child_size};
+      return WindowRectangle{result, child_size};
     }
   }
 
@@ -232,7 +227,7 @@ auto PlaceWindow(WindowPositioner const& positioner,
     }
 
     if (output_rect.contains({result, child_size})) {
-      return FlutterWindowRectangle{result, child_size};
+      return WindowRectangle{result, child_size};
     }
   }
 
@@ -278,7 +273,7 @@ auto PlaceWindow(WindowPositioner const& positioner,
     }
 
     if (output_rect.contains({result, child_size})) {
-      return FlutterWindowRectangle{result, child_size};
+      return WindowRectangle{result, child_size};
     }
   }
 

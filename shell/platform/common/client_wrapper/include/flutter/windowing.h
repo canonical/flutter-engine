@@ -13,56 +13,54 @@ namespace flutter {
 using FlutterViewId = int64_t;
 
 // A point (x, y) in 2D space for window positioning.
-struct FlutterWindowPoint {
+struct WindowPoint {
   int x{0};
   int y{0};
 
-  friend auto operator+(FlutterWindowPoint const& lhs,
-                        FlutterWindowPoint const& rhs) -> FlutterWindowPoint {
+  friend auto operator+(WindowPoint const& lhs,
+                        WindowPoint const& rhs) -> WindowPoint {
     return {lhs.x + rhs.x, lhs.y + rhs.y};
   }
 
-  friend auto operator-(FlutterWindowPoint const& lhs,
-                        FlutterWindowPoint const& rhs) -> FlutterWindowPoint {
+  friend auto operator-(WindowPoint const& lhs,
+                        WindowPoint const& rhs) -> WindowPoint {
     return {lhs.x - rhs.x, lhs.y - rhs.y};
   }
 
-  friend bool operator==(FlutterWindowPoint const& lhs,
-                         FlutterWindowPoint const& rhs) {
+  friend bool operator==(WindowPoint const& lhs, WindowPoint const& rhs) {
     return lhs.x == rhs.x && lhs.y == rhs.y;
   }
 };
 
 // A size (width, height) in 2D space.
-struct FlutterWindowSize {
+struct WindowSize {
   int width{0};
   int height{0};
 
-  explicit operator FlutterWindowPoint() const { return {width, height}; }
+  explicit operator WindowPoint() const { return {width, height}; }
 
-  friend bool operator==(FlutterWindowSize const& lhs,
-                         FlutterWindowSize const& rhs) {
+  friend bool operator==(WindowSize const& lhs, WindowSize const& rhs) {
     return lhs.width == rhs.width && lhs.height == rhs.height;
   }
 };
 
 // A rectangular area defined by a top-left point and size.
-struct FlutterWindowRectangle {
-  FlutterWindowPoint top_left;
-  FlutterWindowSize size;
+struct WindowRectangle {
+  WindowPoint top_left;
+  WindowSize size;
 
   // Checks if this rectangle fully contains |rect|.
   // Note: An empty rectangle can still contain other empty rectangles,
   // which are treated as points or lines of thickness zero
-  auto contains(FlutterWindowRectangle const& rect) const -> bool {
+  auto contains(WindowRectangle const& rect) const -> bool {
     return rect.top_left.x >= top_left.x &&
            rect.top_left.x + rect.size.width <= top_left.x + size.width &&
            rect.top_left.y >= top_left.y &&
            rect.top_left.y + rect.size.height <= top_left.y + size.height;
   }
 
-  friend bool operator==(FlutterWindowRectangle const& lhs,
-                         FlutterWindowRectangle const& rhs) {
+  friend bool operator==(WindowRectangle const& lhs,
+                         WindowRectangle const& rhs) {
     return lhs.top_left == rhs.top_left && lhs.size == rhs.size;
   }
 };
@@ -103,14 +101,14 @@ struct WindowPositioner {
   // The reference anchor rectangle relative to the client rectangle of the
   // parent window. If nullopt, the anchor rectangle is assumed to be the window
   // rectangle.
-  std::optional<FlutterWindowRectangle> anchor_rect;
+  std::optional<WindowRectangle> anchor_rect;
   // Specifies which anchor of the parent window to align to.
   Anchor parent_anchor{Anchor::center};
   // Specifies which anchor of the child window to align with the parent.
   Anchor child_anchor{Anchor::center};
   // Offset relative to the position of the anchor on the anchor rectangle and
   // the anchor on the child.
-  FlutterWindowPoint offset;
+  WindowPoint offset;
   // The adjustments to apply if the window doesn't fit the available space.
   // The order of precedence is: 1) Flip, 2) Slide, 3) Resize.
   ConstraintAdjustment constraint_adjustment{ConstraintAdjustment::none};
@@ -141,7 +139,7 @@ struct WindowCreationResult {
   // Archetype of the window.
   WindowArchetype archetype{WindowArchetype::regular};
   // Size of the created window, in logical coordinates.
-  FlutterWindowSize size;
+  WindowSize size;
 };
 
 namespace internal {
@@ -155,11 +153,10 @@ namespace internal {
 // in this function; use |anchor_rect| to set the anchor rectangle for the
 // child.
 auto PlaceWindow(WindowPositioner const& positioner,
-                 FlutterWindowSize child_size,
-                 FlutterWindowRectangle const& anchor_rect,
-                 FlutterWindowRectangle const& parent_rect,
-                 FlutterWindowRectangle const& output_rect)
-    -> FlutterWindowRectangle;
+                 WindowSize child_size,
+                 WindowRectangle const& anchor_rect,
+                 WindowRectangle const& parent_rect,
+                 WindowRectangle const& output_rect) -> WindowRectangle;
 
 }  // namespace internal
 

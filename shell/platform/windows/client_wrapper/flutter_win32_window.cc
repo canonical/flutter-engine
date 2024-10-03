@@ -4,10 +4,12 @@
 
 namespace flutter {
 
-FlutterWin32Window::FlutterWin32Window(
-    std::shared_ptr<FlutterEngine> engine,
-    FlutterWindowController* window_controller)
-    : engine_{std::move(engine)}, Win32Window{window_controller} {}
+FlutterWin32Window::FlutterWin32Window(std::shared_ptr<FlutterEngine> engine)
+    : engine_{std::move(engine)} {}
+
+FlutterWin32Window::FlutterWin32Window(std::shared_ptr<FlutterEngine> engine,
+                                       std::shared_ptr<Win32Wrapper> wrapper)
+    : engine_{std::move(engine)}, Win32Window{std::move(wrapper)} {}
 
 auto FlutterWin32Window::GetFlutterViewId() const -> FlutterViewId {
   return view_controller_->view_id();

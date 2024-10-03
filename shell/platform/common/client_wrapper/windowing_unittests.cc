@@ -11,9 +11,9 @@ namespace flutter {
 using Positioner = WindowPositioner;
 using Anchor = Positioner::Anchor;
 using Constraint = Positioner::ConstraintAdjustment;
-using Rectangle = FlutterWindowRectangle;
-using Point = FlutterWindowPoint;
-using Size = FlutterWindowSize;
+using Rectangle = WindowRectangle;
+using Point = WindowPoint;
+using Size = WindowSize;
 
 std::ostream& operator<<(std::ostream& os, Point const& point) {
   return os << "(x: " << point.x << ", y: " << point.y << ")";
