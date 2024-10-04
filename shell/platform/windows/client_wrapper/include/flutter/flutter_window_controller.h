@@ -55,7 +55,9 @@ class FlutterWindowController {
 
   void DestroyWindows();
   auto GetWindowSize(FlutterViewId view_id) const -> WindowSize;
-  void HandleCreateWindow(MethodCall<> const& call, MethodResult<>& result);
+  void HandleCreateWindow(WindowArchetype archetype,
+                          MethodCall<> const& call,
+                          MethodResult<>& result);
   void HandleDestroyWindow(MethodCall<> const& call, MethodResult<>& result);
   // Hides all satellite windows in the application, except those that are
   // descendants of |opt_out_hwnd| or have a dialog as a child. By default,

@@ -232,11 +232,14 @@ FlutterWindowController::FlutterWindowController(
 
 void FlutterWindowController::MethodCallHandler(MethodCall<> const& call,
                                                 MethodResult<>& result) {
-  if (call.method_name() == "createRegularWindow" ||
-      call.method_name() == "createDialogWindow" ||
-      call.method_name() == "createSatelliteWindow" ||
-      call.method_name() == "createPopupWindow") {
-    HandleCreateWindow(call, result);
+  if (call.method_name() == "createRegularWindow") {
+    HandleCreateWindow(WindowArchetype::regular, call, result);
+  } else if (call.method_name() == "createDialogWindow") {
+    HandleCreateWindow(WindowArchetype::dialog, call, result);
+  } else if (call.method_name() == "createSatelliteWindow") {
+    HandleCreateWindow(WindowArchetype::satellite, call, result);
+  } else if (call.method_name() == "createPopupWindow") {
+    HandleCreateWindow(WindowArchetype::popup, call, result);
   } else if (call.method_name() == "destroyWindow") {
     HandleDestroyWindow(call, result);
   } else {
@@ -378,24 +381,9 @@ void FlutterWindowController::SendOnWindowResized(FlutterViewId view_id) const {
   }
 }
 
-void FlutterWindowController::HandleCreateWindow(MethodCall<> const& call,
+void FlutterWindowController::HandleCreateWindow(WindowArchetype archetype,
+                                                 MethodCall<> const& call,
                                                  MethodResult<>& result) {
-  auto const archetype{[](std::string const& name) -> WindowArchetype {
-    if (name.find("Regular") != std::string::npos) {
-      return WindowArchetype::regular;
-    }
-    if (name.find("Dialog") != std::string::npos) {
-      return WindowArchetype::dialog;
-    }
-    if (name.find("Satellite") != std::string::npos) {
-      return WindowArchetype::satellite;
-    }
-    if (name.find("Popup") != std::string::npos) {
-      return WindowArchetype::popup;
-    }
-    return WindowArchetype::regular;
-  }(call.method_name())};
-
   auto const* const arguments{call.arguments()};
   auto const* const map{std::get_if<EncodableMap>(arguments)};
   if (!map) {
