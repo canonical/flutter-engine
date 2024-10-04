@@ -88,6 +88,7 @@ executable("client_wrapper_windows_unittests") {
     "flutter_engine_unittests.cc",
     "flutter_view_controller_unittests.cc",
     "flutter_view_unittests.cc",
+    "flutter_window_controller_unittests.cc",
     "plugin_registrar_windows_unittests.cc",
   ]
 
@@ -98,6 +99,7 @@ executable("client_wrapper_windows_unittests") {
     ":client_wrapper_library_stubs_windows",
     ":client_wrapper_windows",
     ":client_wrapper_windows_fixtures",
+    "//flutter/shell/platform/common/client_wrapper",
     "//flutter/shell/platform/common/client_wrapper:client_wrapper_library_stubs",
     "//flutter/testing",
 
