@@ -12,25 +12,27 @@ class FlutterWin32Window : public Win32Window {
  public:
   // Creates a new FlutterWin32Window hosting a Flutter view running |engine|.
   explicit FlutterWin32Window(std::shared_ptr<FlutterEngine> engine);
+  FlutterWin32Window(std::shared_ptr<FlutterEngine> engine,
+                     std::shared_ptr<Win32Wrapper> wrapper);
   ~FlutterWin32Window() override = default;
 
-  auto flutter_controller() -> std::unique_ptr<FlutterViewController> const&;
+  auto GetFlutterViewId() const -> FlutterViewId;
 
  protected:
   // Win32Window:
-  bool OnCreate() override;
+  auto OnCreate() -> bool override;
   void OnDestroy() override;
-  LRESULT MessageHandler(HWND hwnd,
-                         UINT message,
-                         WPARAM wparam,
-                         LPARAM lparam) override;
+  auto MessageHandler(HWND hwnd,
+                      UINT message,
+                      WPARAM wparam,
+                      LPARAM lparam) -> LRESULT override;
 
  private:
   // The engine this window is attached to.
   std::shared_ptr<FlutterEngine> engine_;
 
   // The Flutter instance hosted by this window.
-  std::unique_ptr<FlutterViewController> flutter_controller_;
+  std::unique_ptr<FlutterViewController> view_controller_;
 };
 
 }  // namespace flutter
