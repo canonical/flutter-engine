@@ -85,7 +85,7 @@ struct WindowPositioner {
   // 1. 'flip_{x|y|any}': reverse the anchor points and offset along an axis.
   // 2. 'slide_{x|y|any}': adjust the offset along an axis.
   // 3. 'resize_{x|y|any}': adjust the window size along an axis.
-  enum ConstraintAdjustment {
+  enum class ConstraintAdjustment {
     none = 0,                          // No adjustment.
     slide_x = 1 << 0,                  // Slide horizontally to fit.
     slide_y = 1 << 1,                  // Slide vertically to fit.

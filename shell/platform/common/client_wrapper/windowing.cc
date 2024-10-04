@@ -145,8 +145,8 @@ auto PlaceWindow(WindowPositioner const& positioner,
     default_result = WindowRectangle{result, child_size};
   }
 
-  if (positioner.constraint_adjustment &
-      WindowPositioner::ConstraintAdjustment::flip_x) {
+  if (static_cast<int>(positioner.constraint_adjustment) &
+      static_cast<int>(WindowPositioner::ConstraintAdjustment::flip_x)) {
     auto const result{
         constrain_to(parent_rect,
                      anchor_position_for(
@@ -159,8 +159,8 @@ auto PlaceWindow(WindowPositioner const& positioner,
     }
   }
 
-  if (positioner.constraint_adjustment &
-      WindowPositioner::ConstraintAdjustment::flip_y) {
+  if (static_cast<int>(positioner.constraint_adjustment) &
+      static_cast<int>(WindowPositioner::ConstraintAdjustment::flip_y)) {
     auto const result{
         constrain_to(parent_rect,
                      anchor_position_for(
@@ -173,10 +173,10 @@ auto PlaceWindow(WindowPositioner const& positioner,
     }
   }
 
-  if (positioner.constraint_adjustment &
-          WindowPositioner::ConstraintAdjustment::flip_x &&
-      positioner.constraint_adjustment &
-          WindowPositioner::ConstraintAdjustment::flip_y) {
+  if (static_cast<int>(positioner.constraint_adjustment) &
+          static_cast<int>(WindowPositioner::ConstraintAdjustment::flip_x) &&
+      static_cast<int>(positioner.constraint_adjustment) &
+          static_cast<int>(WindowPositioner::ConstraintAdjustment::flip_y)) {
     auto const result{
         constrain_to(
             parent_rect,
@@ -198,8 +198,8 @@ auto PlaceWindow(WindowPositioner const& positioner,
                         positioner.offset) +
                 offset_for(child_size, positioner.child_anchor)};
 
-    if (positioner.constraint_adjustment &
-        WindowPositioner::ConstraintAdjustment::slide_x) {
+    if (static_cast<int>(positioner.constraint_adjustment) &
+        static_cast<int>(WindowPositioner::ConstraintAdjustment::slide_x)) {
       auto const left_overhang{result.x - output_rect.top_left.x};
       auto const right_overhang{
           (result.x + child_size.width) -
@@ -212,8 +212,8 @@ auto PlaceWindow(WindowPositioner const& positioner,
       }
     }
 
-    if (positioner.constraint_adjustment &
-        WindowPositioner::ConstraintAdjustment::slide_y) {
+    if (static_cast<int>(positioner.constraint_adjustment) &
+        static_cast<int>(WindowPositioner::ConstraintAdjustment::slide_y)) {
       auto const top_overhang{result.y - output_rect.top_left.y};
       auto const bot_overhang{
           (result.y + child_size.height) -
@@ -238,8 +238,8 @@ auto PlaceWindow(WindowPositioner const& positioner,
                         positioner.offset) +
                 offset_for(child_size, positioner.child_anchor)};
 
-    if (positioner.constraint_adjustment &
-        WindowPositioner::ConstraintAdjustment::resize_x) {
+    if (static_cast<int>(positioner.constraint_adjustment) &
+        static_cast<int>(WindowPositioner::ConstraintAdjustment::resize_x)) {
       auto const left_overhang{result.x - output_rect.top_left.x};
       auto const right_overhang{
           (result.x + child_size.width) -
@@ -255,8 +255,8 @@ auto PlaceWindow(WindowPositioner const& positioner,
       }
     }
 
-    if (positioner.constraint_adjustment &
-        WindowPositioner::ConstraintAdjustment::resize_y) {
+    if (static_cast<int>(positioner.constraint_adjustment) &
+        static_cast<int>(WindowPositioner::ConstraintAdjustment::resize_y)) {
       auto const top_overhang{result.y - output_rect.top_left.y};
       auto const bot_overhang{
           (result.y + child_size.height) -

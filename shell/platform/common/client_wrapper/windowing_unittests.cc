@@ -102,7 +102,8 @@ TEST_F(WindowPlacementTest, ClientAnchorsToParentGivenRectAnchorRightOfParent) {
                               .parent_anchor = Anchor::top_right,
                               .child_anchor = Anchor::top_left,
                               .constraint_adjustment = static_cast<Constraint>(
-                                  Constraint::slide_y | Constraint::resize_x)};
+                                  static_cast<int>(Constraint::slide_y) |
+                                  static_cast<int>(Constraint::resize_x))};
 
   auto const child_rect{internal::PlaceWindow(
       positioner, child_size, positioner.anchor_rect.value(),
@@ -160,7 +161,8 @@ TEST_F(WindowPlacementTest, ClientAnchorsToParentGivenOffsetRightOfParent) {
                               .child_anchor = Anchor::top_left,
                               .offset = Point{rect_size, 0},
                               .constraint_adjustment = static_cast<Constraint>(
-                                  Constraint::slide_y | Constraint::resize_x)};
+                                  static_cast<int>(Constraint::slide_y) |
+                                  static_cast<int>(Constraint::resize_x))};
 
   auto const child_rect{internal::PlaceWindow(
       positioner, child_size, positioner.anchor_rect.value(),
