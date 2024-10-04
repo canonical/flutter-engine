@@ -214,6 +214,8 @@ auto FlutterWindowController::DestroyFlutterWindow(FlutterViewId view_id)
     }
 
     lock.unlock();
+
+    // |window| will be removed from |windows_| when WM_NCDESTROY is handled
     win32_->DestroyWindow(window->GetHandle());
 
     return true;
