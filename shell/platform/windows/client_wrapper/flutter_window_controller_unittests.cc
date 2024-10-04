@@ -61,7 +61,7 @@ class MockMethodResult : public MethodResult<> {
  public:
   MOCK_METHOD(void,
               SuccessInternal,
-              (const EncodableValue* result),
+              (EncodableValue const* result),
               (override));
   MOCK_METHOD(void,
               ErrorInternal,
@@ -137,10 +137,6 @@ TEST_F(FlutterWindowControllerTest, CreateRegularWindow) {
                              CW_USEDEFAULT, CW_USEDEFAULT, Gt(size.width),
                              Gt(size.height), IsNull(), _, _, _))
       .Times(1);
-  EXPECT_CALL(*mock_controller_,
-              SendOnWindowCreated(archetype, 1, Eq(std::nullopt)))
-      .Times(1);
-  EXPECT_CALL(*mock_controller_, SendOnWindowResized(1)).Times(1);
 
   auto const result{mock_controller_->CreateFlutterWindow(
       title, size, archetype, positioner, parent_view_id)};
@@ -165,14 +161,84 @@ TEST_F(FlutterWindowControllerTest, DestroyWindow) {
 
   ASSERT_TRUE(create_result.has_value());
 
-  EXPECT_CALL(*mock_win32_, DestroyWindow(k_hwnd)).Times(AnyNumber());
-  EXPECT_CALL(*mock_controller_, SendOnWindowDestroyed).Times(1);
+  EXPECT_CALL(*mock_win32_, DestroyWindow(k_hwnd)).Times(1);
 
   EXPECT_TRUE(mock_controller_->DestroyFlutterWindow(1));
-  EXPECT_FALSE(mock_controller_->DestroyFlutterWindow(9999));
 }
 
-TEST_F(FlutterWindowControllerTest, SendOnWindowResized) {
+TEST_F(FlutterWindowControllerTest, DestroyWindowWithInvalidView) {
+  testing::ScopedStubFlutterWindowsApi scoped_api_stub(
+      std::make_unique<TestWindowsApi>());
+  auto test_api{static_cast<TestWindowsApi*>(scoped_api_stub.stub())};
+
+  auto const title{L"window"};
+  WindowSize const size{800, 600};
+  auto const archetype{WindowArchetype::regular};
+
+  auto const create_result{mock_controller_->CreateFlutterWindow(
+      title, size, archetype, std::nullopt, std::nullopt)};
+
+  ASSERT_TRUE(create_result.has_value());
+
+  EXPECT_CALL(*mock_win32_, DestroyWindow(k_hwnd)).Times(0);
+
+  EXPECT_FALSE(mock_controller_->DestroyFlutterWindow(9999));
+
+  Mock::VerifyAndClearExpectations(mock_win32_.get());
+}
+
+TEST_F(FlutterWindowControllerTest, SendOnWindowCreated) {
+  testing::ScopedStubFlutterWindowsApi scoped_api_stub(
+      std::make_unique<TestWindowsApi>());
+  auto test_api{static_cast<TestWindowsApi*>(scoped_api_stub.stub())};
+
+  auto const title{L"window"};
+  WindowSize const size{800, 600};
+  auto const archetype{WindowArchetype::regular};
+
+  EXPECT_CALL(*mock_controller_,
+              SendOnWindowCreated(archetype, 1, Eq(std::nullopt)))
+      .Times(1);
+
+  auto const create_result{mock_controller_->CreateFlutterWindow(
+      title, size, archetype, std::nullopt, std::nullopt)};
+}
+
+TEST_F(FlutterWindowControllerTest, SendOnWindowDestroyed) {
+  testing::ScopedStubFlutterWindowsApi scoped_api_stub(
+      std::make_unique<TestWindowsApi>());
+  auto test_api{static_cast<TestWindowsApi*>(scoped_api_stub.stub())};
+
+  auto const title{L"window"};
+  WindowSize const size{800, 600};
+  auto const archetype{WindowArchetype::regular};
+
+  auto const create_result{mock_controller_->CreateFlutterWindow(
+      title, size, archetype, std::nullopt, std::nullopt)};
+
+  ASSERT_TRUE(create_result.has_value());
+
+  EXPECT_CALL(*mock_controller_, SendOnWindowDestroyed).Times(1);
+
+  mock_controller_->DestroyFlutterWindow(1);
+}
+
+TEST_F(FlutterWindowControllerTest, SendOnWindowResizedWhenWindowIsCreated) {
+  testing::ScopedStubFlutterWindowsApi scoped_api_stub(
+      std::make_unique<TestWindowsApi>());
+  auto test_api{static_cast<TestWindowsApi*>(scoped_api_stub.stub())};
+
+  auto const title{L"window"};
+  WindowSize const size{800, 600};
+  auto const archetype{WindowArchetype::regular};
+
+  EXPECT_CALL(*mock_controller_, SendOnWindowResized(1)).Times(1);
+
+  auto const create_result{mock_controller_->CreateFlutterWindow(
+      title, size, archetype, std::nullopt, std::nullopt)};
+}
+
+TEST_F(FlutterWindowControllerTest, SendOnWindowResizedWhenWindowIsResized) {
   testing::ScopedStubFlutterWindowsApi scoped_api_stub(
       std::make_unique<TestWindowsApi>());
   auto test_api{static_cast<TestWindowsApi*>(scoped_api_stub.stub())};
@@ -239,7 +305,7 @@ TEST_F(FlutterWindowControllerTest, DestroyWindowUsingMethodCall) {
   NiceMock<MockMethodResult> mock_result;
 
   EXPECT_CALL(mock_result, SuccessInternal(_)).Times(1);
-  EXPECT_CALL(*mock_win32_, DestroyWindow(k_hwnd)).Times(AnyNumber());
+  EXPECT_CALL(*mock_win32_, DestroyWindow(k_hwnd)).Times(1);
 
   mock_controller_->MethodCallHandler(call, mock_result);
 }
