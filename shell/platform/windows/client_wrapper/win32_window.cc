@@ -693,6 +693,7 @@ void Win32Window::OnDestroy() {
         if (auto* const owner_window{GetThisFromHandle(owner_window_handle)}) {
           owner_window->children_.erase(this);
         }
+        SetFocus(owner_window_handle);
       }
       break;
     case WindowArchetype::popup:
