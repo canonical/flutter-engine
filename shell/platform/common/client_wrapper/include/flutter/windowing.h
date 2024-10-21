@@ -130,16 +130,17 @@ enum class WindowArchetype {
   tip,
 };
 
-// The result of creating a Flutter window.
-struct WindowCreationResult {
-  // ID of the created view.
+// Window metadata returned as the result of creating a Flutter window.
+struct WindowMetadata {
+  // The ID of the view used for this window, which is unique to each window.
   FlutterViewId view_id{0};
-  // ID of the parent view, if any.
-  std::optional<FlutterViewId> parent_id;
-  // Archetype of the window.
+  // The type of the window (e.g., regular, dialog, popup, etc).
   WindowArchetype archetype{WindowArchetype::regular};
   // Size of the created window, in logical coordinates.
   WindowSize size;
+  // The ID of the view used by the parent window. If not set, the window is
+  // assumed a top-level window.
+  std::optional<FlutterViewId> parent_id;
 };
 
 namespace internal {
