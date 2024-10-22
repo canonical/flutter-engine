@@ -508,13 +508,14 @@ void FlutterWindowController::HandleCreateWindow(WindowArchetype archetype,
     auto const& data{data_opt.value()};
     result.Success(EncodableValue(EncodableMap{
         {EncodableValue("viewId"), EncodableValue(data.view_id)},
-        {EncodableValue("parentViewId"),
-         data.parent_id ? EncodableValue(data.parent_id.value())
-                        : EncodableValue()},
         {EncodableValue("archetype"),
          EncodableValue(static_cast<int>(data.archetype))},
-        {EncodableValue("width"), EncodableValue(data.size.width)},
-        {EncodableValue("height"), EncodableValue((data.size.height))}}));
+        {EncodableValue("size"),
+         EncodableValue(EncodableList{EncodableValue(data.size.width),
+                                      EncodableValue(data.size.height)})},
+        {EncodableValue("parentViewId"),
+         data.parent_id ? EncodableValue(data.parent_id.value())
+                        : EncodableValue()}}));
   } else {
     result.Error(kErrorCodeUnavailable, "Can't create window.");
   }
