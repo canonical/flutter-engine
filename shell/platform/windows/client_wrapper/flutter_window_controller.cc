@@ -154,7 +154,7 @@ auto FlutterWindowController::CreateFlutterWindow(
     WindowArchetype archetype,
     std::optional<WindowPositioner> positioner,
     std::optional<FlutterViewId> parent_view_id)
-    -> std::optional<WindowCreationResult> {
+    -> std::optional<WindowMetadata> {
   std::unique_lock lock(mutex_);
   if (!engine_) {
     std::cerr << "Cannot create window without an engine.\n";
@@ -185,13 +185,12 @@ auto FlutterWindowController::CreateFlutterWindow(
   auto const view_id{window->GetFlutterViewId()};
   windows_[view_id] = std::move(window);
 
-  SendOnWindowCreated(archetype, view_id, parent_view_id);
-  SendOnWindowResized(view_id);
+  SendOnWindowCreated(view_id, parent_view_id);
 
-  WindowCreationResult result{.view_id = view_id,
-                              .parent_id = parent_view_id,
-                              .archetype = archetype,
-                              .size = GetWindowSize(view_id)};
+  WindowMetadata result{.view_id = view_id,
+                        .archetype = archetype,
+                        .size = GetWindowSize(view_id),
+                        .parent_id = parent_view_id};
 
   return result;
 }
@@ -232,13 +231,13 @@ FlutterWindowController::FlutterWindowController(
 
 void FlutterWindowController::MethodCallHandler(MethodCall<> const& call,
                                                 MethodResult<>& result) {
-  if (call.method_name() == "createRegularWindow") {
+  if (call.method_name() == "createWindow") {
     HandleCreateWindow(WindowArchetype::regular, call, result);
-  } else if (call.method_name() == "createDialogWindow") {
+  } else if (call.method_name() == "createDialog") {
     HandleCreateWindow(WindowArchetype::dialog, call, result);
-  } else if (call.method_name() == "createSatelliteWindow") {
+  } else if (call.method_name() == "createSatellite") {
     HandleCreateWindow(WindowArchetype::satellite, call, result);
-  } else if (call.method_name() == "createPopupWindow") {
+  } else if (call.method_name() == "createPopup") {
     HandleCreateWindow(WindowArchetype::popup, call, result);
   } else if (call.method_name() == "destroyWindow") {
     HandleDestroyWindow(call, result);
@@ -328,7 +327,7 @@ auto FlutterWindowController::MessageHandler(HWND hwnd,
                                  })};
       if (it != windows_.end()) {
         auto const view_id{it->first};
-        SendOnWindowResized(view_id);
+        SendOnWindowChanged(view_id);
       }
     } break;
     default:
@@ -342,7 +341,6 @@ auto FlutterWindowController::MessageHandler(HWND hwnd,
 }
 
 void FlutterWindowController::SendOnWindowCreated(
-    WindowArchetype archetype,
     FlutterViewId view_id,
     std::optional<FlutterViewId> parent_view_id) const {
   if (channel_) {
@@ -352,9 +350,7 @@ void FlutterWindowController::SendOnWindowCreated(
             {EncodableValue("viewId"), EncodableValue(view_id)},
             {EncodableValue("parentViewId"),
              parent_view_id ? EncodableValue(parent_view_id.value())
-                            : EncodableValue()},
-            {EncodableValue("archetype"),
-             EncodableValue(static_cast<int>(archetype))}}));
+                            : EncodableValue()}}));
   }
 }
 
@@ -369,15 +365,18 @@ void FlutterWindowController::SendOnWindowDestroyed(
   }
 }
 
-void FlutterWindowController::SendOnWindowResized(FlutterViewId view_id) const {
+void FlutterWindowController::SendOnWindowChanged(FlutterViewId view_id) const {
   if (channel_) {
     auto const size{GetWindowSize(view_id)};
     channel_->InvokeMethod(
-        "onWindowResized",
+        "onWindowChanged",
         std::make_unique<EncodableValue>(EncodableMap{
             {EncodableValue("viewId"), EncodableValue(view_id)},
-            {EncodableValue("width"), EncodableValue(size.width)},
-            {EncodableValue("height"), EncodableValue(size.height)}}));
+            {EncodableValue("size"),
+             EncodableValue(EncodableList{EncodableValue(size.width),
+                                          EncodableValue(size.height)})},
+            {EncodableValue("relativePosition"), EncodableValue()},  // TODO
+            {EncodableValue("isMoving"), EncodableValue()}}));       // TODO
   }
 }
 
@@ -509,13 +508,14 @@ void FlutterWindowController::HandleCreateWindow(WindowArchetype archetype,
     auto const& data{data_opt.value()};
     result.Success(EncodableValue(EncodableMap{
         {EncodableValue("viewId"), EncodableValue(data.view_id)},
-        {EncodableValue("parentViewId"),
-         data.parent_id ? EncodableValue(data.parent_id.value())
-                        : EncodableValue()},
         {EncodableValue("archetype"),
          EncodableValue(static_cast<int>(data.archetype))},
-        {EncodableValue("width"), EncodableValue(data.size.width)},
-        {EncodableValue("height"), EncodableValue((data.size.height))}}));
+        {EncodableValue("size"),
+         EncodableValue(EncodableList{EncodableValue(data.size.width),
+                                      EncodableValue(data.size.height)})},
+        {EncodableValue("parentViewId"),
+         data.parent_id ? EncodableValue(data.parent_id.value())
+                        : EncodableValue()}}));
   } else {
     result.Error(kErrorCodeUnavailable, "Can't create window.");
   }

@@ -25,7 +25,7 @@ class FlutterWindowController {
                            WindowArchetype archetype,
                            std::optional<WindowPositioner> positioner,
                            std::optional<FlutterViewId> parent_view_id)
-      -> std::optional<WindowCreationResult>;
+      -> std::optional<WindowMetadata>;
   auto DestroyFlutterWindow(FlutterViewId view_id) -> bool;
 
   static FlutterWindowController& GetInstance() {
@@ -44,11 +44,10 @@ class FlutterWindowController {
                       LPARAM lparam) -> LRESULT;
 
   virtual void SendOnWindowCreated(
-      WindowArchetype archetype,
       FlutterViewId view_id,
       std::optional<FlutterViewId> parent_view_id) const;
   virtual void SendOnWindowDestroyed(FlutterViewId view_id) const;
-  virtual void SendOnWindowResized(FlutterViewId view_id) const;
+  virtual void SendOnWindowChanged(FlutterViewId view_id) const;
 
  private:
   friend class Win32Window;
